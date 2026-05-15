@@ -5,15 +5,29 @@ import type { StreamEvent } from "../events.js";
  * Niftty adapter — renders syntax-highlighted diffs for file mutations.
  *
  * Uses niftty's Shiki-powered renderer to show:
- * - `file_create`: full file with all-green additions
+ * - `file_create`: full file with all-green additions, streaming mode
  * - `file_edit`: intra-line change highlighting with collapsed unchanged regions
+ *
+ * Streaming behavior:
+ *   When a file is created, the diff renders with `streaming: true` — niftty
+ *   dims lines that haven't been "reached" yet and highlights the current line.
+ *   If the same file is edited later in the same session, the adapter clears
+ *   the previous render and replaces it with an updated diff showing the
+ *   cumulative changes from the original committed version.
  *
  * This adapter handles ONLY file_create and file_edit events.
  * Pair it with TTYAdapter via MultiAdapter for full streaming UX.
  */
 export class NifttyAdapter implements StreamAdapter {
   private highlighter: any = null;
-  private fileContents = new Map<string, string>();
+  /** Tracks the original content (first seen or committed version) per file. */
+  private originalContents = new Map<string, string>();
+  /** Tracks the current content (after creates/edits) per file. */
+  private currentContents = new Map<string, string>();
+  /** Tracks how many lines the last render occupied per file, for ANSI rewind. */
+  private lastRenderLines = new Map<string, number>();
+  /** The file currently being rendered (for ANSI rewind). */
+  private lastRenderedFile: string | null = null;
 
   /**
    * @param collapsed - Whether to collapse unchanged regions (default: true)
@@ -40,22 +54,47 @@ export class NifttyAdapter implements StreamAdapter {
 
   async write(event: StreamEvent): Promise<void> {
     switch (event.type) {
-      case "file_create":
-        // Track content for future edits
-        this.fileContents.set(event.path, event.content);
-        await this.renderDiff("", event.content, event.path, true);
+      case "file_create": {
+        // Deduplicate: skip if content hasn't changed since last render
+        if (this.currentContents.get(event.path) === event.content) break;
+
+        // First time seeing this file — the "original" is empty
+        if (!this.originalContents.has(event.path)) {
+          this.originalContents.set(event.path, "");
+        }
+        this.currentContents.set(event.path, event.content);
+
+        await this.renderFileDiff(event.path, {
+          streaming: true,
+          label: "new",
+        });
         break;
+      }
 
       case "file_edit": {
-        // Get the original content (before this edit)
-        const original = this.fileContents.get(event.path) ?? "";
-        // Apply the edit to get new content
-        // The diff string from the event is a patch, but we need the final content.
-        // For now we reconstruct from the edit details. The file_edit event
-        // contains the diff string (old/new text pairs), so we apply them.
-        const updated = applyEdits(original, event.diff);
-        this.fileContents.set(event.path, updated);
-        await this.renderDiff(original, updated, event.path, false);
+        const original = this.originalContents.get(event.path)
+          ?? this.currentContents.get(event.path)
+          ?? "";
+
+        // If this is the first time we see this file (edit without prior create),
+        // the current content IS the original
+        if (!this.originalContents.has(event.path)) {
+          this.originalContents.set(event.path, original);
+        }
+
+        // Apply edits to get new content
+        const current = this.currentContents.get(event.path) ?? "";
+        const updated = applyEdits(current, event.diff);
+        this.currentContents.set(event.path, updated);
+
+        // If the last render was for this same file, rewind and replace
+        const shouldRewind = this.lastRenderedFile === event.path;
+
+        await this.renderFileDiff(event.path, {
+          streaming: false,
+          label: "modified",
+          rewind: shouldRewind,
+        });
         break;
       }
 
@@ -68,15 +107,21 @@ export class NifttyAdapter implements StreamAdapter {
       this.highlighter.dispose();
       this.highlighter = null;
     }
-    this.fileContents.clear();
+    this.originalContents.clear();
+    this.currentContents.clear();
+    this.lastRenderLines.clear();
+    this.lastRenderedFile = null;
   }
 
-  private async renderDiff(
-    original: string,
-    current: string,
+  private async renderFileDiff(
     filePath: string,
-    isNew: boolean,
+    opts: { streaming: boolean; label: string; rewind?: boolean },
   ): Promise<void> {
+    const original = this.originalContents.get(filePath) ?? "";
+    const current = this.currentContents.get(filePath) ?? "";
+
+    if (original === current) return; // No change
+
     try {
       const { niftty } = await import("niftty");
 
@@ -85,20 +130,38 @@ export class NifttyAdapter implements StreamAdapter {
         diffWith: original,
         filePath,
         theme: this.theme as any,
-        collapseUnchanged: this.collapsed,
+        collapseUnchanged: this.collapsed && !opts.streaming,
         lineNumbers: "both",
+        streaming: opts.streaming,
         highlighter: this.highlighter ?? undefined,
       });
 
-      // File header
-      const label = isNew ? "(new)" : "(modified)";
-      process.stderr.write(`\n  ┌─ ${filePath} ${label}\n`);
-      // Indent each line of rendered output
-      const lines = rendered.split("\n");
-      for (const line of lines) {
-        process.stderr.write(`  │ ${line}\n`);
+      // If rewinding, clear the previous render
+      if (opts.rewind && this.lastRenderLines.has(filePath)) {
+        const linesToClear = this.lastRenderLines.get(filePath)!;
+        // Move cursor up and clear each line
+        for (let i = 0; i < linesToClear; i++) {
+          process.stderr.write("\x1b[A\x1b[2K");
+        }
       }
-      process.stderr.write(`  └${"─".repeat(58)}\n`);
+
+      // Build the framed output, stripping niftty's trailing whitespace padding
+      const termWidth = process.stderr.columns || 80;
+      const frameLines: string[] = [];
+      frameLines.push(`\n  ┌─ ${filePath} (${opts.label})`);
+      for (const line of rendered.split("\n")) {
+        const trimmed = line.trimEnd();
+        if (trimmed) frameLines.push(`  │ ${trimmed}`);
+      }
+      const sepWidth = Math.min(termWidth - 4, 58);
+      frameLines.push(`  └${"─".repeat(sepWidth)}`);
+
+      const output = frameLines.join("\n") + "\n";
+      process.stderr.write(output);
+
+      // Track for potential rewind
+      this.lastRenderLines.set(filePath, frameLines.length);
+      this.lastRenderedFile = filePath;
     } catch {
       // Fallback: just print the path (TTYAdapter already does this)
     }
@@ -108,31 +171,36 @@ export class NifttyAdapter implements StreamAdapter {
 /**
  * Apply edit diffs to original content.
  *
- * The edit diff format from the normalizer is a series of
- * `oldText → newText` replacements as a stringified patch.
- * For simple cases, we do sequential string replacement.
+ * The diff from the normalizer uses `- oldLine` / `+ newLine` format.
+ * We parse out old/new text blocks and apply sequential replacements.
  */
 function applyEdits(original: string, diffString: string): string {
-  // The diff string from FileEditEvent contains the edit tool's output.
-  // Format: pairs of oldText/newText. We parse and apply sequentially.
-  //
-  // If the diff format is a unified diff, we can't easily apply it.
-  // For now, return original + diff appended as a fallback indicator
-  // that the TTYAdapter should handle the raw diff display.
-  //
-  // The real content will be tracked via file_create events for new
-  // writes and subsequent reads. This is a best-effort reconstruction.
-  try {
-    // Try to parse as JSON edit pairs: [{ oldText, newText }]
-    const edits = JSON.parse(diffString) as Array<{ oldText: string; newText: string }>;
-    let result = original;
-    for (const edit of edits) {
-      result = result.replace(edit.oldText, edit.newText);
+  if (!diffString) return original;
+
+  // Parse the `- old` / `+ new` line format from buildDiff()
+  const lines = diffString.split("\n");
+  const oldLines: string[] = [];
+  const newLines: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("- ")) {
+      oldLines.push(line.slice(2));
+    } else if (line.startsWith("+ ")) {
+      newLines.push(line.slice(2));
     }
-    return result;
-  } catch {
-    // Not JSON — treat as a unified diff or raw patch.
-    // Return original since we can't reliably apply it.
+  }
+
+  if (oldLines.length === 0 && newLines.length === 0) {
     return original;
   }
+
+  const oldText = oldLines.join("\n");
+  const newText = newLines.join("\n");
+
+  if (oldText && original.includes(oldText)) {
+    return original.replace(oldText, newText);
+  }
+
+  // If we can't find the old text, append (shouldn't happen in practice)
+  return original;
 }
