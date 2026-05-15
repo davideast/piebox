@@ -20,3 +20,8 @@ export function formatOutput<T = unknown>(
     process.exit(1);
   }
 }
+
+/** Shorthand for formatOutput with auto-detected TTY. */
+export function output(result: any, args: { json?: boolean }) {
+  formatOutput(result, { json: args.json, tty: process.stdout.isTTY });
+}

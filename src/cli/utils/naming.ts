@@ -13,3 +13,9 @@ export function generateTripleName(): string {
 export function generatePushId(): string {
   return crypto.randomBytes(8).toString("hex");
 }
+
+/** Resolve sandbox name from args or auto-generate. */
+export function getName(args: Record<string, unknown>): string {
+  if (typeof args.sandbox === "string" && args.sandbox.length > 0) return args.sandbox;
+  return process.stdout.isTTY ? generateTripleName() : generatePushId();
+}
