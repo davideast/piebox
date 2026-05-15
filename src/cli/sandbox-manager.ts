@@ -1,7 +1,11 @@
 import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
 import * as path from "node:path";
+import { posix } from "node:path";
 import { sandbox } from "../sandbox.js";
-import type { SandboxInstance, VFSSnapshot } from "../sandbox.js";
+import type { SandboxInstance } from "../sandbox.js";
+import { writeTarGz, readTarGz } from "./tar.js";
+import type { TarEntry } from "./tar.js";
 
 export interface SandboxMetadata {
   name: string;
@@ -57,22 +61,59 @@ export class SandboxManager {
     }
 
     const dir = this.getSandboxDir(name);
-    const snapshotStr = await fs.readFile(path.join(dir, "snapshot.json"), "utf-8");
-    const snapshot = JSON.parse(snapshotStr) as VFSSnapshot;
+    const tarPath = path.join(dir, "snapshot.tar.gz");
+    const jsonPath = path.join(dir, "snapshot.json");
 
-    return sandbox({ snapshot });
+    // Try tar.gz first (new format)
+    try {
+      await fs.stat(tarPath);
+      return await this.loadFromTar(tarPath);
+    } catch {
+      // Fall through to JSON
+    }
+
+    // Fall back to snapshot.json (legacy format)
+    try {
+      const snapshotStr = await fs.readFile(jsonPath, "utf-8");
+      const snapshot = JSON.parse(snapshotStr);
+      const sb = sandbox({ snapshot });
+
+      // Auto-migrate: save as tar.gz, delete JSON
+      await this.save(name, sb);
+      try {
+        await fs.unlink(jsonPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+
+      return sb;
+    } catch {
+      // No snapshot at all — return empty sandbox
+      return sandbox();
+    }
   }
 
   async save(name: string, sb: SandboxInstance): Promise<void> {
     const dir = this.getSandboxDir(name);
     await fs.mkdir(dir, { recursive: true });
 
-    const snapshot = sb.snapshot();
-    await fs.writeFile(
-      path.join(dir, "snapshot.json"),
-      JSON.stringify(snapshot, null, 2)
-    );
+    // Walk VFS and collect entries
+    const entries: TarEntry[] = [];
+    this.walkVFS(sb, "/", (filePath, content) => {
+      entries.push({
+        path: filePath,
+        content: Buffer.from(content, "utf-8"),
+      });
+    });
 
+    // Atomic write: temp file → rename
+    const tmpPath = path.join(dir, "snapshot.tar.gz.tmp");
+    const finalPath = path.join(dir, "snapshot.tar.gz");
+
+    await writeTarGz(tmpPath, entries);
+    await fs.rename(tmpPath, finalPath);
+
+    // Update metadata
     const metadataPath = path.join(dir, "metadata.json");
     let metadata: SandboxMetadata;
     try {
@@ -118,6 +159,50 @@ export class SandboxManager {
       await fs.rm(dir, { recursive: true, force: true });
     } catch {
       // Ignore
+    }
+  }
+
+  // ── Private helpers ──────────────────────────────────────────────
+
+  private async loadFromTar(tarPath: string): Promise<SandboxInstance> {
+    const entries = await readTarGz(tarPath);
+    const sb = sandbox();
+
+    for (const entry of entries) {
+      const dir = posix.dirname(entry.path);
+      try {
+        sb.fs.mkdirSync(dir, { recursive: true });
+      } catch {
+        // Directory may already exist
+      }
+      sb.fs.writeFileSync(entry.path, entry.content.toString("utf-8"));
+    }
+
+    return sb;
+  }
+
+  private walkVFS(
+    sb: SandboxInstance,
+    dir: string,
+    callback: (path: string, content: string) => void,
+  ): void {
+    try {
+      const entries = sb.fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = posix.join(dir, entry.name);
+        try {
+          if (entry.isDirectory()) {
+            this.walkVFS(sb, fullPath, callback);
+          } else if (entry.isFile()) {
+            const content = sb.fs.readFileSync(fullPath, "utf-8") as string;
+            callback(fullPath, content);
+          }
+        } catch {
+          // skip unreadable entries
+        }
+      }
+    } catch {
+      // empty directory or error
     }
   }
 }
