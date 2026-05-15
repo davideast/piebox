@@ -1,24 +1,63 @@
 import { defineCommand, runMain } from "citty";
-import { SandboxManager } from "./sandbox-manager.js";
-import { CloneHandler } from "./services/clone/handler.js";
-import { CommitHandler } from "./services/commit/handler.js";
-import { ExportHandler } from "./services/export/handler.js";
-import { RunHandler } from "./services/run/handler.js";
 import { generateTripleName, generatePushId } from "./utils/naming.js";
 import { formatOutput } from "./utils/output.js";
 
-const manager = new SandboxManager();
-const cloneHandler = new CloneHandler(manager);
-const commitHandler = new CommitHandler(manager);
-const exportHandler = new ExportHandler(manager);
-const runHandler = new RunHandler(cloneHandler, commitHandler, exportHandler, manager);
+// ── Lazy loader ─────────────────────────────────────────────────────────────
+// Heavy imports (SDK, VFS, isomorphic-git) only load when a command runs,
+// not when --help is printed.
+
+let _manager: any;
+let _runHandler: any;
+let _cloneHandler: any;
+let _commitHandler: any;
+let _exportHandler: any;
+
+async function getManager() {
+  if (!_manager) {
+    const { SandboxManager } = await import("./sandbox-manager.js");
+    _manager = new SandboxManager();
+  }
+  return _manager;
+}
+
+async function getRunHandler() {
+  if (!_runHandler) {
+    const manager = await getManager();
+    const { CloneHandler } = await import("./services/clone/handler.js");
+    const { CommitHandler } = await import("./services/commit/handler.js");
+    const { ExportHandler } = await import("./services/export/handler.js");
+    const { RunHandler } = await import("./services/run/handler.js");
+    _cloneHandler = new CloneHandler(manager);
+    _commitHandler = new CommitHandler(manager);
+    _exportHandler = new ExportHandler(manager);
+    _runHandler = new RunHandler(_cloneHandler, _commitHandler, _exportHandler, manager);
+  }
+  return _runHandler;
+}
+
+async function getCloneHandler() {
+  if (!_cloneHandler) await getRunHandler(); // initializes all handlers
+  return _cloneHandler;
+}
+
+async function getCommitHandler() {
+  if (!_commitHandler) await getRunHandler();
+  return _commitHandler;
+}
+
+async function getExportHandler() {
+  if (!_exportHandler) await getRunHandler();
+  return _exportHandler;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function getName(args: Record<string, unknown>): string {
   if (typeof args.sandbox === "string" && args.sandbox.length > 0) return args.sandbox;
   return process.stdout.isTTY ? generateTripleName() : generatePushId();
 }
 
-// ── Shared flags for run + bare ────────────────────────────────────────────
+// ── Shared flags for run ────────────────────────────────────────────────────
 
 const runArgs = {
   prompt: { type: "positional" as const, description: "Prompt for the agent", required: true },
@@ -38,7 +77,6 @@ const runArgs = {
 };
 
 async function executeRun(args: Record<string, any>): Promise<void> {
-  // Load .env if --dir is used
   // Load .env for API keys
   try {
     const path = await import("node:path");
@@ -53,6 +91,7 @@ async function executeRun(args: Record<string, any>): Promise<void> {
     : undefined;
 
   const sandboxName = args.dir ? undefined : getName(args);
+  const runHandler = await getRunHandler();
 
   const result = await runHandler.execute({
     prompt: args.prompt,
@@ -101,11 +140,11 @@ const cloneCommand = defineCommand({
   },
   async run({ args }) {
     const sandboxName = getName(args);
+    const cloneHandler = await getCloneHandler();
     const result = await cloneHandler.execute({ url: args.url, sandboxName });
     formatOutput(result, { json: args.json, tty: process.stdout.isTTY });
   }
 });
-
 
 const commitCommand = defineCommand({
   meta: { name: "commit", description: "Commit changes in the sandbox" },
@@ -115,6 +154,7 @@ const commitCommand = defineCommand({
     json: { type: "boolean" }
   },
   async run({ args }) {
+    const commitHandler = await getCommitHandler();
     const result = await commitHandler.execute({ sandboxName: args.sandbox, message: args.message });
     formatOutput(result, { json: args.json, tty: process.stdout.isTTY });
   }
@@ -128,6 +168,7 @@ const exportCommand = defineCommand({
     json: { type: "boolean" }
   },
   async run({ args }) {
+    const exportHandler = await getExportHandler();
     const result = await exportHandler.execute({ sandboxName: args.sandbox, outPath: args.out });
     formatOutput(result, { json: args.json, tty: process.stdout.isTTY });
   }
@@ -141,6 +182,7 @@ const diffCommand = defineCommand({
   },
   async run({ args }) {
     try {
+      const manager = await getManager();
       const sb = await manager.load(args.sandbox);
       if (!sb.git) throw new Error("Not a git repository");
       const files = await sb.git.modifiedFiles();
@@ -155,6 +197,7 @@ const sandboxListCommand = defineCommand({
   meta: { name: "list", description: "List all sandboxes" },
   args: { json: { type: "boolean" } },
   async run({ args }) {
+    const manager = await getManager();
     const list = await manager.list();
     formatOutput({ success: true, data: list }, { json: args.json, tty: process.stdout.isTTY });
   }
@@ -167,6 +210,7 @@ const sandboxDestroyCommand = defineCommand({
     json: { type: "boolean" }
   },
   async run({ args }) {
+    const manager = await getManager();
     await manager.destroy(args.sandbox);
     formatOutput({ success: true, data: { destroyed: args.sandbox } }, { json: args.json, tty: process.stdout.isTTY });
   }
