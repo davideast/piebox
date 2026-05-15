@@ -128,6 +128,134 @@ await sb.git.branch("feat/x")     // create and checkout a branch
 await sb.git.listBranches()        // list all branches
 ```
 
+## CLI
+
+A command-line interface for running agents in sandboxes without writing code.
+
+```bash
+npx piebox run "Add error handling to src/" --url https://github.com/user/repo
+```
+
+### Commands
+
+| Command | Description |
+|---|---|
+| `piebox run "<prompt>"` | Run a prompt in a sandbox |
+| `piebox clone <url>` | Clone a repo into a sandbox |
+| `piebox commit -s <name>` | Commit changes in the sandbox |
+| `piebox export -s <name> --out ./dir` | Write sandbox files to disk |
+| `piebox diff -s <name>` | Show what changed |
+| `piebox sandbox list` | List all sandboxes |
+| `piebox sandbox destroy <name>` | Destroy a sandbox |
+
+### `piebox run`
+
+The primary command. Creates a sandbox, runs an agent, and reports what changed.
+
+```bash
+# Basic usage
+piebox run "Create a fibonacci function in fib.ts"
+
+# Clone a repo first, then prompt
+piebox run "Fix the bug in utils.ts" --url https://github.com/user/repo
+
+# Seed from a local directory
+piebox run "Add tests" --dir ./my-project
+
+# Use a specific model
+piebox run "Refactor auth" -m gemini-3-flash-preview
+
+# Name the sandbox for later
+piebox run "Add validation" -s my-sandbox
+
+# Continue working on an existing sandbox
+piebox run "Now add tests for the validation" -s my-sandbox
+```
+
+### Streaming output
+
+Every run streams activity to the terminal and writes a markdown session log.
+
+**Default** — file mutations only:
+
+```
+🤖 Prompting gemini-3-flash-preview...
+  + fib.ts
+  + fib.test.ts
+
+────────────────────────────────────────
+✓ 4.4s · 2 new · 0 modified · 2 tool calls
+```
+
+**Verbose** (`-v`) — includes bash commands, thinking, file listings:
+
+```
+🤖 Prompting gemini-3-flash-preview...
+  💭 I'll create a fibonacci function and comprehensive tests
+  + fib.ts
+  $ node --test fib.test.ts
+  ~ fib.ts
+  + fib.test.ts
+
+────────────────────────────────────────
+✓ 12.3s · 2 new · 1 modified · 5 tool calls
+```
+
+### Session logs
+
+Every run produces a markdown session log alongside the raw JSONL event log:
+
+```
+logs/
+├── my-sandbox.jsonl    ← raw SDK events
+└── my-sandbox.md       ← human-readable session log
+```
+
+The markdown file is a complete, valid document at every point during execution — you can read it while the agent is still running.
+
+```markdown
+# Agent Session
+
+| | |
+|---|---|
+| **Model** | gemini-3-flash-preview |
+| **Sandbox** | my-sandbox |
+| **Started** | 2026-05-15T09:31:53.900Z |
+
+## Activity
+
+- ✅ Created `fib.ts`
+- ✅ Created `fib.test.ts`
+- 🖥️ `node --test fib.test.ts`
+
+## Summary
+
+| | |
+|---|---|
+| **Duration** | 4.4s |
+| **Tool calls** | 3 |
+| **New files** | 2 |
+```
+
+### Output pipeline
+
+The streaming output uses an adapter pattern. The same normalized event stream powers both terminal and markdown output, and can be extended to new formats:
+
+```ts
+import { normalize, NormalizerState, MultiAdapter, TTYAdapter, MarkdownAdapter } from "piebox/cli/streaming";
+
+const adapter = new MultiAdapter([
+  new TTYAdapter(verbose),
+  new MarkdownAdapter("session.md"),
+]);
+
+await adapter.start();
+adapter.write({ type: "file_create", path: "fib.ts" });
+await adapter.end();
+```
+
+Available adapters: `TTYAdapter`, `MarkdownAdapter`. The `StreamAdapter` interface is three methods: `start()`, `write(event)`, `end()`.
+
 ## Architecture
 
 ```
