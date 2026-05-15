@@ -8,8 +8,9 @@ import type { StreamEvent } from "../events.js";
  * Every tool call becomes a section with full payloads:
  * - File creates include the complete file content in fenced code blocks
  * - Edits include a unified diff
- * - Bash commands include stdout output
+ * - Bash commands show the command, then output arrives via tool_result
  * - Thinking includes the full reasoning text
+ * - Tool results render output or errors below the preceding tool call
  *
  * The file is a valid markdown document at every point during execution.
  */
@@ -40,7 +41,6 @@ export class MarkdownAdapter implements StreamAdapter {
 
       case "thinking":
         this.append(`### 💭 Thinking\n\n`);
-        // Indent each line as a blockquote
         const lines = event.text.split("\n").map(l => `> ${l}`).join("\n");
         this.append(`${lines}\n\n`);
         break;
@@ -64,24 +64,32 @@ export class MarkdownAdapter implements StreamAdapter {
       case "bash":
         this.toolCalls++;
         this.append(`### 🖥️ \`${event.command}\`\n\n`);
-        if (event.output) {
-          this.append(`\`\`\`\n${event.output}\n\`\`\`\n\n`);
-        }
         break;
 
       case "file_read":
         this.toolCalls++;
-        this.append(`- 📖 Read \`${event.path}\`\n`);
+        this.append(`### 📖 Read \`${event.path}\`\n\n`);
         break;
 
       case "file_list":
         this.toolCalls++;
-        this.append(`- 📂 Listed \`${event.path}\`\n`);
+        this.append(`### 📂 List \`${event.path}\`\n\n`);
         break;
 
       case "search":
         this.toolCalls++;
-        this.append(`- 🔍 ${event.tool} \`${event.query}\`\n`);
+        this.append(`### 🔍 ${event.tool} \`${event.query}\`\n\n`);
+        break;
+
+      case "tool_result":
+        if (event.output) {
+          if (event.isError) {
+            const errLines = event.output.split("\n").map((l: string) => `> ${l}`).join("\n");
+            this.append(`> ⚠️ **Error**\n>\n${errLines}\n\n`);
+          } else {
+            this.append(`\`\`\`\n${event.output}\n\`\`\`\n\n`);
+          }
+        }
         break;
 
       case "error":
@@ -98,7 +106,6 @@ export class MarkdownAdapter implements StreamAdapter {
         this.append(`| **Modified files** | ${event.modifiedFiles.length} |\n`);
         this.append(`| **Unchanged** | ${event.unchangedCount} |\n\n`);
 
-        // File tree
         if (event.fileTree && event.fileTree.length > 0) {
           this.append(`## File Tree\n\n`);
           this.append(`| File | Size | Status |\n`);

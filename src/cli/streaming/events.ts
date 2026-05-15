@@ -16,6 +16,7 @@ export type StreamEvent =
   | FileReadEvent
   | FileListEvent
   | SearchEvent
+  | ToolResultEvent
   | TextDeltaEvent
   | SessionEndEvent
   | ErrorEvent;
@@ -50,22 +51,34 @@ export interface BashEvent {
   type: "bash";
   command: string;
   output: string;
+  toolCallId: string;
 }
 
 export interface FileReadEvent {
   type: "file_read";
   path: string;
+  toolCallId: string;
 }
 
 export interface FileListEvent {
   type: "file_list";
   path: string;
+  toolCallId: string;
 }
 
 export interface SearchEvent {
   type: "search";
   tool: "grep" | "find";
   query: string;
+  toolCallId: string;
+}
+
+export interface ToolResultEvent {
+  type: "tool_result";
+  toolCallId: string;
+  toolName: string;
+  output: string;
+  isError: boolean;
 }
 
 export interface TextDeltaEvent {

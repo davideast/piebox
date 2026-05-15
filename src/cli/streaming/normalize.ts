@@ -11,6 +11,21 @@ import { NormalizerState } from "./events.js";
  * Returns null for events that should be silently skipped.
  */
 export function normalize(raw: any, state: NormalizerState): StreamEvent | null {
+  // ── Tool execution results (top-level events, not inside assistantMessageEvent) ──
+  if (raw.type === "tool_execution_end") {
+    const content = raw.result?.content;
+    const text = Array.isArray(content) && content.length > 0
+      ? content.map((c: any) => c.text ?? "").join("\n")
+      : "";
+    return {
+      type: "tool_result",
+      toolCallId: raw.toolCallId ?? "",
+      toolName: raw.toolName ?? "",
+      output: text,
+      isError: raw.isError ?? false,
+    };
+  }
+
   if (raw.type !== "message_update") return null;
   const inner = raw.assistantMessageEvent;
   if (!inner) return null;
@@ -31,7 +46,7 @@ export function normalize(raw: any, state: NormalizerState): StreamEvent | null 
     const tc = inner.toolCall ?? {};
     const name: string = tc.name ?? "";
     const args = tc.arguments ?? {};
-    const result = tc.result ?? {};
+    const id: string = tc.id ?? tc.toolCallId ?? "";
 
     switch (name) {
       case "write":
@@ -51,16 +66,17 @@ export function normalize(raw: any, state: NormalizerState): StreamEvent | null 
         return {
           type: "bash",
           command: typeof args.command === "string" ? args.command : "",
-          output: typeof result.output === "string" ? result.output : "",
+          output: "",  // populated later via tool_result
+          toolCallId: id,
         };
       case "read":
-        return { type: "file_read", path: args.path ?? "" };
+        return { type: "file_read", path: args.path ?? "", toolCallId: id };
       case "ls":
-        return { type: "file_list", path: args.path ?? "." };
+        return { type: "file_list", path: args.path ?? ".", toolCallId: id };
       case "grep":
-        return { type: "search", tool: "grep", query: args.query ?? args.pattern ?? "" };
+        return { type: "search", tool: "grep", query: args.query ?? args.pattern ?? "", toolCallId: id };
       case "find":
-        return { type: "search", tool: "find", query: args.pattern ?? "" };
+        return { type: "search", tool: "find", query: args.pattern ?? "", toolCallId: id };
       default:
         return null;
     }
