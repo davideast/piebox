@@ -6,48 +6,25 @@ import { formatOutput } from "./utils/output.js";
 // Heavy imports (SDK, VFS, isomorphic-git) only load when a command runs,
 // not when --help is printed.
 
-let _manager: any;
-let _runHandler: any;
-let _cloneHandler: any;
-let _commitHandler: any;
-let _exportHandler: any;
+let _services: Awaited<ReturnType<typeof initServices>>;
 
-async function getManager() {
-  if (!_manager) {
-    const { SandboxManager } = await import("./sandbox-manager.js");
-    _manager = new SandboxManager();
-  }
-  return _manager;
-}
+async function initServices() {
+  if (_services) return _services;
 
-async function getRunHandler() {
-  if (!_runHandler) {
-    const manager = await getManager();
-    const { CloneHandler } = await import("./services/clone/handler.js");
-    const { CommitHandler } = await import("./services/commit/handler.js");
-    const { ExportHandler } = await import("./services/export/handler.js");
-    const { RunHandler } = await import("./services/run/handler.js");
-    _cloneHandler = new CloneHandler(manager);
-    _commitHandler = new CommitHandler(manager);
-    _exportHandler = new ExportHandler(manager);
-    _runHandler = new RunHandler(_cloneHandler, _commitHandler, _exportHandler, manager);
-  }
-  return _runHandler;
-}
+  const { SandboxManager } = await import("./sandbox-manager.js");
+  const { CloneHandler } = await import("./services/clone/handler.js");
+  const { CommitHandler } = await import("./services/commit/handler.js");
+  const { ExportHandler } = await import("./services/export/handler.js");
+  const { RunHandler } = await import("./services/run/handler.js");
 
-async function getCloneHandler() {
-  if (!_cloneHandler) await getRunHandler(); // initializes all handlers
-  return _cloneHandler;
-}
+  const manager = new SandboxManager();
+  const clone = new CloneHandler(manager);
+  const commit = new CommitHandler(manager);
+  const exp = new ExportHandler(manager);
+  const run = new RunHandler(clone, commit, exp, manager);
 
-async function getCommitHandler() {
-  if (!_commitHandler) await getRunHandler();
-  return _commitHandler;
-}
-
-async function getExportHandler() {
-  if (!_exportHandler) await getRunHandler();
-  return _exportHandler;
+  _services = { manager, run, clone, commit, export: exp };
+  return _services;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -55,6 +32,10 @@ async function getExportHandler() {
 function getName(args: Record<string, unknown>): string {
   if (typeof args.sandbox === "string" && args.sandbox.length > 0) return args.sandbox;
   return process.stdout.isTTY ? generateTripleName() : generatePushId();
+}
+
+function output(result: unknown, args: { json?: boolean }) {
+  formatOutput(result, { json: args.json, tty: process.stdout.isTTY });
 }
 
 // ── Shared flags for run ────────────────────────────────────────────────────
@@ -91,9 +72,9 @@ async function executeRun(args: Record<string, any>): Promise<void> {
     : undefined;
 
   const sandboxName = args.dir ? undefined : getName(args);
-  const runHandler = await getRunHandler();
+  const { run } = await initServices();
 
-  const result = await runHandler.execute({
+  const result = await run.execute({
     prompt: args.prompt,
     sandboxName,
     url: args.url,
@@ -136,14 +117,12 @@ const cloneCommand = defineCommand({
   args: {
     url: { type: "positional", description: "Git URL", required: true },
     sandbox: { type: "string", alias: "s", description: "Sandbox name" },
-    json: { type: "boolean" }
+    json: { type: "boolean" },
   },
   async run({ args }) {
-    const sandboxName = getName(args);
-    const cloneHandler = await getCloneHandler();
-    const result = await cloneHandler.execute({ url: args.url, sandboxName });
-    formatOutput(result, { json: args.json, tty: process.stdout.isTTY });
-  }
+    const { clone } = await initServices();
+    output(await clone.execute({ url: args.url, sandboxName: getName(args) }), args);
+  },
 });
 
 const commitCommand = defineCommand({
@@ -151,13 +130,12 @@ const commitCommand = defineCommand({
   args: {
     sandbox: { type: "string", alias: "s", description: "Sandbox name", required: true },
     message: { type: "string", alias: "m", description: "Commit message" },
-    json: { type: "boolean" }
+    json: { type: "boolean" },
   },
   async run({ args }) {
-    const commitHandler = await getCommitHandler();
-    const result = await commitHandler.execute({ sandboxName: args.sandbox, message: args.message });
-    formatOutput(result, { json: args.json, tty: process.stdout.isTTY });
-  }
+    const { commit } = await initServices();
+    output(await commit.execute({ sandboxName: args.sandbox, message: args.message }), args);
+  },
 });
 
 const exportCommand = defineCommand({
@@ -165,55 +143,53 @@ const exportCommand = defineCommand({
   args: {
     sandbox: { type: "string", alias: "s", description: "Sandbox name", required: true },
     out: { type: "string", description: "Output directory", required: true },
-    json: { type: "boolean" }
+    json: { type: "boolean" },
   },
   async run({ args }) {
-    const exportHandler = await getExportHandler();
-    const result = await exportHandler.execute({ sandboxName: args.sandbox, outPath: args.out });
-    formatOutput(result, { json: args.json, tty: process.stdout.isTTY });
-  }
+    const { export: exp } = await initServices();
+    output(await exp.execute({ sandboxName: args.sandbox, outPath: args.out }), args);
+  },
 });
 
 const diffCommand = defineCommand({
   meta: { name: "diff", description: "Show what changed" },
   args: {
     sandbox: { type: "string", alias: "s", description: "Sandbox name", required: true },
-    json: { type: "boolean" }
+    json: { type: "boolean" },
   },
   async run({ args }) {
     try {
-      const manager = await getManager();
+      const { manager } = await initServices();
       const sb = await manager.load(args.sandbox);
       if (!sb.git) throw new Error("Not a git repository");
       const files = await sb.git.modifiedFiles();
-      formatOutput({ success: true, data: { files } }, { json: args.json, tty: process.stdout.isTTY });
+      output({ success: true, data: { files } }, args);
     } catch (e: unknown) {
-      formatOutput({ success: false, error: { code: "DIFF_FAILED", message: (e instanceof Error ? e.message : String(e)) } }, { json: args.json, tty: process.stdout.isTTY });
+      output({ success: false, error: { code: "DIFF_FAILED", message: (e instanceof Error ? e.message : String(e)) } }, args);
     }
-  }
+  },
 });
 
 const sandboxListCommand = defineCommand({
   meta: { name: "list", description: "List all sandboxes" },
   args: { json: { type: "boolean" } },
   async run({ args }) {
-    const manager = await getManager();
-    const list = await manager.list();
-    formatOutput({ success: true, data: list }, { json: args.json, tty: process.stdout.isTTY });
-  }
+    const { manager } = await initServices();
+    output({ success: true, data: await manager.list() }, args);
+  },
 });
 
 const sandboxDestroyCommand = defineCommand({
   meta: { name: "destroy", description: "Destroy a sandbox" },
   args: {
     sandbox: { type: "positional", description: "Sandbox name", required: true },
-    json: { type: "boolean" }
+    json: { type: "boolean" },
   },
   async run({ args }) {
-    const manager = await getManager();
+    const { manager } = await initServices();
     await manager.destroy(args.sandbox);
-    formatOutput({ success: true, data: { destroyed: args.sandbox } }, { json: args.json, tty: process.stdout.isTTY });
-  }
+    output({ success: true, data: { destroyed: args.sandbox } }, args);
+  },
 });
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -222,7 +198,7 @@ const mainCommand = defineCommand({
   meta: {
     name: "piebox",
     version: "0.1.0",
-    description: "Piebox CLI - Lightweight in-memory sandbox environment"
+    description: "Piebox CLI - Lightweight in-memory sandbox environment",
   },
   subCommands: {
     run: runCommand,
@@ -234,9 +210,9 @@ const mainCommand = defineCommand({
       meta: { name: "sandbox", description: "Manage sandboxes" },
       subCommands: {
         list: sandboxListCommand,
-        destroy: sandboxDestroyCommand
-      }
-    })
+        destroy: sandboxDestroyCommand,
+      },
+    }),
   },
 });
 
