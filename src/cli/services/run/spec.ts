@@ -13,6 +13,10 @@ export const RunInputSchema = z.object({
   // Model
   model: z.string().optional(),
 
+  // Runtime (defaults: node ON, npm/github/jsdelivr network ON)
+  runtime: z.union([z.enum(["node"]), z.literal(false)]).optional(),
+  network: z.array(z.string()).optional(),
+
   // Run chaining
   continue: z.boolean().default(false),
   from: z.string().optional(),
@@ -45,7 +49,7 @@ export type RunError =
 
 export interface RunOutput {
   sandboxName?: string;
-  runId?: string;
+  sessionId?: string;
   elapsedMs: number;
   newFiles: string[];
   modifiedFiles: string[];
@@ -55,6 +59,10 @@ export interface RunOutput {
   bytesWritten: number;
   commitSha?: string;
   logFile?: string;
+  runtimeConfig?: {
+    runtime?: "node" | false;
+    network?: string[];
+  };
 }
 
 export interface IRunService {

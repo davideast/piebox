@@ -1,3 +1,13 @@
+---
+name: pi-coding-agent
+description: >
+  Build sandboxed autonomous agent workflows with @earendil-works/pi-coding-agent and @earendil-works/pi-ai
+license: Apache-2.0
+metadata:
+  author: David East
+  version: "2.0"
+---
+
 # Pi SDK: Under the Hood
 
 Comprehensive technical documentation for building sandboxed autonomous agent workflows with the `@earendil-works/pi-coding-agent`, `@earendil-works/pi-agent-core`, and `@earendil-works/pi-ai` SDK packages.

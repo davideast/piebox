@@ -11,6 +11,8 @@ const runArgs = {
   dir: { type: "string" as const, description: "Local directory to seed into the sandbox" },
   sandbox: { type: "string" as const, alias: "s", description: "Sandbox name" },
   model: { type: "string" as const, alias: "m", description: "Model to use" },
+  runtime: { type: "string" as const, alias: "r", description: "Runtime: 'node' enables QuickJS sandbox" },
+  network: { type: "string" as const, alias: "n", description: "Allowed network origins (comma-separated)" },
   context: { type: "string" as const, alias: "c", description: "Context files/dirs to inject (comma-separated)" },
   continue: { type: "boolean" as const, description: "Overlay latest run output before prompting", default: false },
   from: { type: "string" as const, description: "Overlay a specific run's output (run ID or path)" },
@@ -36,6 +38,17 @@ async function executeRun(args: Record<string, any>): Promise<void> {
     ? args.context.split(",").map((s: string) => s.trim())
     : undefined;
 
+  const networkOrigins = args.network !== undefined
+    ? (args.network === "" ? [] : args.network.split(",").map((s: string) => s.trim()))
+    : undefined;
+
+  // --runtime node (explicit), --runtime false (opt-out), or undefined (use defaults)
+  const runtime = args.runtime === "false" || args.runtime === false
+    ? false as const
+    : args.runtime === "node"
+      ? "node" as const
+      : undefined;
+
   const sandboxName = args.dir ? undefined : getName(args);
   const { run } = await initServices();
 
@@ -45,6 +58,8 @@ async function executeRun(args: Record<string, any>): Promise<void> {
     url: args.url,
     dir: args.dir,
     model: args.model,
+    runtime,
+    network: networkOrigins,
     context: contextPaths,
     continue: args.continue,
     from: args.from,

@@ -48,10 +48,17 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { create as createVFS, type VirtualFileSystem } from "@platformatic/vfs";
 import { Bash, type BashOptions } from "just-bash";
+import type { AllowedUrlEntry } from "just-bash";
 import { createBashFsAdapter } from "./adapters/bash-fs-adapter.js";
 import { createSandboxedTools } from "./tools.js";
 import { loadSkillsFromVFS } from "./skills.js";
 import { cloneIntoSandbox, createGitUtilities, type CloneOptions, type GitUtilities } from "./git.js";
+import {
+  resolveSecrets,
+  generateBootstrap,
+  SecretsScrubber,
+  type SecretsConfig,
+} from "./secrets.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, dirname, posix } from "node:path";
 
@@ -94,9 +101,81 @@ export interface SandboxOptions {
    */
   vfs?: VirtualFileSystem;
 
+  // ─── Sugar (high-level, declarative) ─────────
+
   /**
-   * Bash configuration (python, js, execution limits).
-   * The `fs` and `cwd` fields are managed by the sandbox.
+   * Enable a runtime for the sandbox shell.
+   *
+   * - `'node'`  — enables `node` and `js-exec` commands (QuickJS).
+   *               Agent can run `node -e "..."` and `node script.js`.
+   * - `false`   — no JS runtime (default).
+   *
+   * For advanced JS config (bootstrap code, tool bridges),
+   * use `bashOptions.javascript` instead.
+   */
+  runtime?: "node" | false;
+
+  /**
+   * Secrets configuration.
+   *
+   * Two injection modes with different security properties:
+   *
+   * **Expose** — agent sees the raw value in `process.env`.
+   * Values are scrubbed from all output (logs, snapshots, URLs).
+   * Use only when agent code must manipulate the secret directly.
+   *
+   * **Broker** — credentials injected at the network boundary.
+   * Agent never sees the raw value. Preferred for HTTP auth.
+   *
+   * @example
+   * ```ts
+   * // Shorthand: expose only (reads from process.env)
+   * secrets: ['OPENAI_API_KEY']
+   *
+   * // Full: expose + broker
+   * secrets: {
+   *   expose: ['OPENAI_API_KEY'],
+   *   broker: {
+   *     'https://api.github.com': {
+   *       Authorization: `Bearer ${ghToken}`,
+   *     },
+   *   },
+   * }
+   * ```
+   *
+   * For custom bootstrap injection or tool bridges,
+   * use `bashOptions.javascript` instead.
+   */
+  secrets?: SecretsConfig;
+
+  /**
+   * Network origins the agent can reach.
+   *
+   * String entries allow GET/HEAD to that origin.
+   * Brokered origins (from `secrets.broker`) are automatically included.
+   * Defaults to no network access.
+   *
+   * @example
+   * ```ts
+   * network: [
+   *   'https://registry.npmjs.org',
+   *   'https://api.openai.com',
+   * ]
+   * ```
+   *
+   * For full control (POST methods, custom timeouts, SSRF config),
+   * use `bashOptions.network` instead.
+   */
+  network?: string[];
+
+  // ─── Escape Hatch (low-level, full control) ──
+
+  /**
+   * Raw just-bash configuration.
+   * Use when the sugar options don't cover your case.
+   *
+   * If both sugar and bashOptions configure the same concern,
+   * bashOptions wins (escape hatch overrides sugar).
    */
   bashOptions?: Omit<BashOptions, "fs" | "cwd">;
 
@@ -150,6 +229,13 @@ export interface SandboxInstance {
 
   /** The virtual working directory. */
   readonly cwd: string;
+
+  /**
+   * Secrets scrubber — replaces exposed secret values with `[NAME]`.
+   * Use to scrub output before writing to logs or displaying to the user.
+   * `null` when no exposed secrets are configured.
+   */
+  readonly scrubber: SecretsScrubber | null;
 
   /**
    * Git utilities. `null` until `clone()` is called.
@@ -213,6 +299,37 @@ const SANDBOX_SYSTEM_PROMPT = [
   "The bash tool supports full shell syntax: pipes, redirections, variables, loops, and 80+ built-in commands.",
 ];
 
+const RUNTIME_NODE_PROMPT = [
+  "",
+  "## JavaScript Runtime",
+  "This sandbox has a QuickJS-based JS/TS runtime. Use `js-exec` (not `node`) to run scripts:",
+  "  js-exec script.js          — run a file",
+  "  js-exec -c 'code'          — inline code",
+  "  js-exec app.ts             — TypeScript (auto-stripped)",
+  "",
+  "Available: require/import, fs, path, child_process (execSync), process, console, fetch().",
+  "NOT available: npm, yarn, pnpm, bun, or any package manager. There is no node_modules.",
+  "To check npm packages, use fetch() against https://registry.npmjs.org/<package>/latest.",
+  "To run HTTP requests, use curl or fetch() inside js-exec.",
+];
+
+/**
+ * Build system prompt lines based on sandbox options.
+ */
+function buildSystemPrompt(options?: SandboxOptions): string[] {
+  const lines = [...SANDBOX_SYSTEM_PROMPT];
+  // Add runtime-specific instructions
+  const hasNodeRuntime = options?.runtime === "node" ||
+    (options?.bashOptions?.javascript !== undefined && options?.bashOptions?.javascript !== false);
+  if (hasNodeRuntime) {
+    lines.push(...RUNTIME_NODE_PROMPT);
+  }
+  if (options?.network && options.network.length > 0) {
+    lines.push("", `Network access: ${options.network.join(", ")}`);
+  }
+  return lines;
+}
+
 /**
  * Create a sandbox — a lightweight, in-memory execution environment.
  *
@@ -235,10 +352,82 @@ export function sandbox(options?: SandboxOptions): SandboxInstance {
   const cwd = options?.cwd ?? DEFAULT_CWD;
   const vfs = options?.vfs ?? createVFS({ moduleHooks: false });
   const bashFs = createBashFsAdapter(vfs);
+
+  // ─── Compile sugar into bashOptions ───────────
+  const bashOptions: Omit<BashOptions, "fs" | "cwd"> = {
+    ...(options?.bashOptions ?? {}),
+  };
+
+  // Resolve secrets
+  const resolvedSecrets = resolveSecrets(options?.secrets);
+
+  // runtime: 'node' → enable javascript (unless escape hatch overrides)
+  if (options?.runtime === "node" && !bashOptions.javascript) {
+    bashOptions.javascript = true;
+  }
+
+  // secrets.expose → QuickJS bootstrap code
+  if (resolvedSecrets.expose.size > 0) {
+    const bootstrap = generateBootstrap(resolvedSecrets.expose, cwd);
+
+    if (bashOptions.javascript === true) {
+      bashOptions.javascript = { bootstrap };
+    } else if (
+      typeof bashOptions.javascript === "object" &&
+      bashOptions.javascript
+    ) {
+      // Append to existing bootstrap (escape hatch + sugar compose)
+      bashOptions.javascript = {
+        ...bashOptions.javascript,
+        bootstrap:
+          (bashOptions.javascript.bootstrap ?? "") + "\n" + bootstrap,
+      };
+    } else if (!bashOptions.javascript) {
+      // Enable javascript if secrets.expose is set but runtime wasn't
+      bashOptions.javascript = { bootstrap };
+    }
+  }
+
+  // secrets.broker + network → allowedUrlPrefixes (unless escape hatch overrides)
+  if (!bashOptions.network) {
+    const prefixes: AllowedUrlEntry[] = [];
+    const brokeredOrigins = new Set<string>();
+
+    // Brokered origins (with credential injection)
+    for (const [origin, headers] of Array.from(resolvedSecrets.broker)) {
+      prefixes.push({
+        url: origin,
+        transform: [{ headers }],
+      });
+      brokeredOrigins.add(origin);
+    }
+
+    // Plain network origins (no credentials)
+    for (const origin of options?.network ?? []) {
+      if (!brokeredOrigins.has(origin)) {
+        prefixes.push(origin);
+      }
+    }
+
+    if (prefixes.length > 0) {
+      bashOptions.network = {
+        allowedUrlPrefixes: prefixes,
+        allowedMethods: ["GET", "HEAD"],
+        denyPrivateRanges: true,
+      };
+    }
+  }
+
+  // ─── Create scrubber for exposed secrets ──────
+  const scrubber = new SecretsScrubber();
+  for (const [name, value] of Array.from(resolvedSecrets.expose)) {
+    scrubber.register(name, value);
+  }
+
   const shell = new Bash({
     fs: bashFs,
     cwd,
-    ...options?.bashOptions,
+    ...bashOptions,
   });
 
   // Restore from snapshot if provided
@@ -266,6 +455,7 @@ export function sandbox(options?: SandboxOptions): SandboxInstance {
     fs: vfs,
     shell,
     cwd,
+    scrubber: scrubber.active ? scrubber : null,
 
     get git() {
       return git;
@@ -304,7 +494,7 @@ export function sandbox(options?: SandboxOptions): SandboxInstance {
       const settingsManager = SettingsManager.inMemory();
 
       const systemPromptLines = [
-        ...SANDBOX_SYSTEM_PROMPT,
+        ...buildSystemPrompt(options),
         ...(sessionOptions.systemPrompt ?? []),
       ];
 
@@ -327,7 +517,16 @@ export function sandbox(options?: SandboxOptions): SandboxInstance {
       });
       await resourceLoader.reload();
 
-      const sandboxedTools = createSandboxedTools(cwd, vfs, shell);
+      // Auto-enable npm-info when registry.npmjs.org is in the network allowlist
+      const hasNpmRegistry = (options?.network ?? []).some(
+        (origin) => origin.includes("registry.npmjs.org"),
+      ) || (bashOptions.network?.allowedUrlPrefixes ?? []).some(
+        (entry: any) => (typeof entry === "string" ? entry : entry.url)?.includes("registry.npmjs.org"),
+      );
+
+      const sandboxedTools = createSandboxedTools(cwd, vfs, shell, {
+        npmInfo: hasNpmRegistry,
+      });
       const allTools = sessionOptions.additionalTools
         ? [...sandboxedTools, ...sessionOptions.additionalTools]
         : sandboxedTools;

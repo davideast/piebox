@@ -3,9 +3,38 @@ import * as path from "node:path";
 import { posix } from "node:path";
 import { sandbox } from "../sandbox.js";
 import { createGitUtilities } from "../git.js";
-import type { SandboxInstance } from "../sandbox.js";
+import type { SandboxInstance, SandboxOptions } from "../sandbox.js";
 import { writeTarGz, readTarGz } from "./tar.js";
 import type { TarEntry } from "./tar.js";
+
+/** Runtime configuration persisted in sandbox metadata. */
+export interface SandboxRuntimeConfig {
+  runtime?: "node" | false;
+  network?: string[];
+}
+
+/**
+ * Sensible defaults — agents are capable out of the box.
+ *
+ * - `node` (QuickJS) is sandboxed with zero host access.
+ *   Agents can run `node -e "..."`, parse JSON, analyze files.
+ *
+ * - npm registry (GET/HEAD only) lets agents check versions,
+ *   audit deps, read package metadata.
+ *
+ * - CDNs for reading package source and raw GitHub files.
+ *
+ * Override with CLI flags or `bashOptions` escape hatch.
+ * Disable with `--runtime false` or `--network ""`.
+ */
+export const DEFAULT_RUNTIME_CONFIG: Required<SandboxRuntimeConfig> = {
+  runtime: "node",
+  network: [
+    "https://registry.npmjs.org",       // npm package metadata (GET/HEAD)
+    "https://raw.githubusercontent.com", // raw file access for public repos
+    "https://cdn.jsdelivr.net",          // package source via CDN
+  ],
+};
 
 export interface SandboxMetadata {
   name: string;
@@ -14,6 +43,8 @@ export interface SandboxMetadata {
   gitUrl?: string;
   /** The cwd used when the sandbox was created/cloned. */
   cwd?: string;
+  /** Runtime configuration (runtime, network allowlist). */
+  runtimeConfig?: SandboxRuntimeConfig;
 }
 
 export class SandboxManager {
@@ -36,15 +67,18 @@ export class SandboxManager {
     }
   }
 
-  async create(name: string, gitUrl?: string): Promise<SandboxInstance> {
+  async create(name: string, gitUrl?: string, runtimeConfig?: SandboxRuntimeConfig): Promise<SandboxInstance> {
     const dir = this.getSandboxDir(name);
     await fs.mkdir(dir, { recursive: true });
+
+    const mergedConfig = this.mergeWithDefaults(runtimeConfig);
 
     const metadata: SandboxMetadata = {
       name,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       gitUrl,
+      runtimeConfig: mergedConfig,
     };
 
     await fs.writeFile(
@@ -52,7 +86,7 @@ export class SandboxManager {
       JSON.stringify(metadata, null, 2)
     );
 
-    const sb = sandbox();
+    const sb = sandbox(this.buildSandboxOptions(mergedConfig));
     await this.save(name, sb);
     return sb;
   }
@@ -66,13 +100,16 @@ export class SandboxManager {
     const tarPath = path.join(dir, "snapshot.tar.gz");
     const jsonPath = path.join(dir, "snapshot.json");
 
-    // Read metadata for cwd
-    const cwd = await this.readCwd(name);
+    // Read metadata for cwd and runtime config
+    const metadata = await this.readMetadata(name);
+    const cwd = metadata.cwd ?? "/sandbox";
+    // Stored config overrides defaults — user's explicit choices win
+    const runtimeConfig = this.mergeWithDefaults(metadata.runtimeConfig);
 
     // Try tar.gz first (new format)
     try {
       await fs.stat(tarPath);
-      return await this.loadFromTar(tarPath, cwd);
+      return await this.loadFromTar(tarPath, cwd, runtimeConfig);
     } catch {
       // Fall through to JSON
     }
@@ -81,7 +118,7 @@ export class SandboxManager {
     try {
       const snapshotStr = await fs.readFile(jsonPath, "utf-8");
       const snapshot = JSON.parse(snapshotStr);
-      const sb = sandbox({ snapshot });
+      const sb = sandbox({ ...this.buildSandboxOptions(runtimeConfig), snapshot });
 
       // Re-initialize git if .git/ exists
       this.initGitIfPresent(sb, cwd);
@@ -97,7 +134,7 @@ export class SandboxManager {
       return sb;
     } catch {
       // No snapshot at all — return empty sandbox
-      return sandbox();
+      return sandbox(this.buildSandboxOptions(runtimeConfig));
     }
   }
 
@@ -171,17 +208,69 @@ export class SandboxManager {
 
   // ── Private helpers ──────────────────────────────────────────────
 
-  private async readCwd(name: string): Promise<string> {
+  private async readMetadata(name: string): Promise<SandboxMetadata> {
     try {
       const metadataStr = await fs.readFile(
         path.join(this.getSandboxDir(name), "metadata.json"),
         "utf-8"
       );
-      const metadata: SandboxMetadata = JSON.parse(metadataStr);
-      return metadata.cwd ?? "/sandbox";
+      return JSON.parse(metadataStr);
     } catch {
-      return "/sandbox";
+      return {
+        name,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
     }
+  }
+
+  /**
+   * Update runtime config on an existing sandbox's metadata.
+   * Used when CLI flags override the stored config.
+   */
+  async updateRuntimeConfig(name: string, runtimeConfig: SandboxRuntimeConfig): Promise<void> {
+    const metadataPath = path.join(this.getSandboxDir(name), "metadata.json");
+    let metadata: SandboxMetadata;
+    try {
+      const str = await fs.readFile(metadataPath, "utf-8");
+      metadata = JSON.parse(str);
+    } catch {
+      metadata = {
+        name,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    metadata.runtimeConfig = runtimeConfig;
+    metadata.updatedAt = new Date().toISOString();
+    await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+  }
+
+  /**
+   * Convert SandboxRuntimeConfig → SandboxOptions sugar fields.
+   */
+  private buildSandboxOptions(config?: SandboxRuntimeConfig): SandboxOptions | undefined {
+    if (!config) return undefined;
+    const hasRuntime = config.runtime === "node";
+    const hasNetwork = config.network && config.network.length > 0;
+    if (!hasRuntime && !hasNetwork) return undefined;
+    return {
+      runtime: hasRuntime ? "node" as const : undefined,
+      network: hasNetwork ? config.network : undefined,
+    };
+  }
+
+  /**
+   * Merge stored/user config with defaults.
+   * User-specified fields win. Missing fields fall back to defaults.
+   * Explicit `false` or `[]` disables the default (opt-out).
+   */
+  private mergeWithDefaults(config?: SandboxRuntimeConfig): SandboxRuntimeConfig {
+    if (!config) return { ...DEFAULT_RUNTIME_CONFIG };
+    return {
+      runtime: config.runtime !== undefined ? config.runtime : DEFAULT_RUNTIME_CONFIG.runtime,
+      network: config.network !== undefined ? config.network : DEFAULT_RUNTIME_CONFIG.network,
+    };
   }
 
   /**
@@ -197,9 +286,9 @@ export class SandboxManager {
     }
   }
 
-  private async loadFromTar(tarPath: string, cwd: string): Promise<SandboxInstance> {
+  private async loadFromTar(tarPath: string, cwd: string, runtimeConfig?: SandboxRuntimeConfig): Promise<SandboxInstance> {
     const entries = await readTarGz(tarPath);
-    const sb = sandbox();
+    const sb = sandbox(this.buildSandboxOptions(runtimeConfig));
 
     for (const entry of entries) {
       const dir = posix.dirname(entry.path);
