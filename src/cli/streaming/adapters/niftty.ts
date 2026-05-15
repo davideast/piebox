@@ -145,13 +145,16 @@ export class NifttyAdapter implements StreamAdapter {
         }
       }
 
-      // Build the framed output, stripping niftty's trailing whitespace padding
+      // Build the framed output
+      // Niftty pads lines to maxCols with spaces INSIDE ANSI background color
+      // sequences (e.g. \x1b[48;2;R;G;Bm code + padding \x1b[0m). Plain trimEnd()
+      // doesn't reach inside the escape codes, so lines overflow on narrow terminals.
       const termWidth = process.stderr.columns || 80;
       const frameLines: string[] = [];
       frameLines.push(`\n  ┌─ ${filePath} (${opts.label})`);
       for (const line of rendered.split("\n")) {
-        const trimmed = line.trimEnd();
-        if (trimmed) frameLines.push(`  │ ${trimmed}`);
+        const stripped = stripAnsiPadding(line);
+        if (stripped) frameLines.push(`  │ ${stripped}`);
       }
       const sepWidth = Math.min(termWidth - 4, 58);
       frameLines.push(`  └${"─".repeat(sepWidth)}`);
@@ -204,4 +207,26 @@ function applyEdits(original: string, diffString: string): string {
 
   // If we can't find the old text, append (shouldn't happen in practice)
   return original;
+}
+
+/**
+ * Strip trailing whitespace padding from niftty ANSI output.
+ *
+ * Niftty renders each line as:
+ *   \x1b[48;2;R;G;Bm  linenum + code + spaces_to_maxCols  \x1b[0m
+ *
+ * The padding spaces sit INSIDE the background color escape, so plain
+ * trimEnd() can't reach them. On narrow terminals the colored padding
+ * wraps to the next line, creating double-height rows.
+ *
+ * Strategy: strip trailing spaces that appear before ANSI reset/color
+ * sequences at the end of the line, then re-append just the resets.
+ */
+function stripAnsiPadding(line: string): string {
+  // Fast path: no ANSI escapes at all
+  if (!line.includes("\x1b")) return line.trimEnd();
+
+  // Match trailing: spaces followed by ANSI sequences and optional whitespace at EOL
+  // The ANSI sequence pattern: \x1b[ followed by digits/semicolons then a letter
+  return line.replace(/ +((?:\x1b\[[\d;]*[a-zA-Z])*)\s*$/, "$1");
 }
