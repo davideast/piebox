@@ -1,47 +1,43 @@
 /**
- * pi-sandbox — Fully in-memory sandboxed agent sessions for the Pi SDK.
+ * pi-sandbox — Lightweight in-memory sandbox environment for agent execution.
  *
  * Architecture:
- *   @platformatic/vfs  ← foundation (node:fs-compatible in-memory filesystem)
- *       ├── just-bash  ← shell interpreter (via IFileSystem adapter)
- *       ├── Pi SDK     ← tool operations (direct VFS sync API)
- *       └── consumer   ← isomorphic-git, require(), or any node:fs user
- *
- * Public API:
- *   createSandboxedSession()   — Primary factory (most consumers need only this)
- *   createSandboxedTools()     — Advanced: build tool definitions à la carte
- *   createBashFsAdapter()      — Advanced: bridge VFS → just-bash IFileSystem
+ *   sandbox.fs     ← @platformatic/vfs (node:fs-compatible in-memory filesystem)
+ *   sandbox.shell  ← just-bash (shell interpreter over the same fs)
+ *   sandbox.git    ← isomorphic-git (after clone, same fs)
  *
  * @example
  * ```ts
- * import { createSandboxedSession } from "./src";
+ * import { sandbox } from "pi-sandbox";
  * import { getModel } from "@earendil-works/pi-ai";
  *
- * const { session, vfs, bash } = await createSandboxedSession({
+ * const sb = sandbox();
+ * await sb.clone({ url: "https://github.com/user/repo" });
+ *
+ * const session = await sb.createSession({
  *   model: getModel("google", "gemini-3-flash-preview"),
- *   seed: { "hello.txt": "Hello, sandbox!" },
  * });
  *
- * await session.prompt("Read hello.txt and tell me what it says.");
- *
- * // vfs is node:fs-compatible — pass directly to isomorphic-git
- * // await git.init({ fs: vfs, dir: "/sandbox" });
+ * await session.prompt("Refactor the error handling.");
+ * const changed = await sb.git.modifiedFiles();
  * ```
  */
 
 // ─── Primary API ────────────────────────────────────────────────────────────
 
-export { createSandboxedSession } from "./session.js";
-export { cloneIntoSandbox, createGitUtilities } from "./git.js";
+export { sandbox } from "./sandbox.js";
+export type {
+  SandboxOptions,
+  SandboxInstance,
+  SandboxCloneOptions,
+  SessionOptions,
+} from "./sandbox.js";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// ─── Git ────────────────────────────────────────────────────────────────────
 
-export type { SandboxSessionOptions, SandboxSessionResult } from "./types.js";
 export type { CloneOptions, CloneResult, GitUtilities } from "./git.js";
 
 // ─── Skills ─────────────────────────────────────────────────────────────────
-// Re-exported so consumers can construct Skill objects without a direct
-// dependency on @earendil-works/pi-coding-agent.
 
 export type { Skill } from "@earendil-works/pi-coding-agent";
 export { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";
@@ -49,19 +45,14 @@ export { loadSkillsFromVFS } from "./skills.js";
 export type { LoadSkillsFromVFSOptions } from "./skills.js";
 
 // ─── Advanced API ───────────────────────────────────────────────────────────
+// Escape hatches for consumers who need lower-level access.
 
+export { createSandboxedSession } from "./session.js";
+export type { SandboxSessionOptions, SandboxSessionResult } from "./types.js";
+export { cloneIntoSandbox, createGitUtilities } from "./git.js";
 export { createSandboxedTools } from "./tools.js";
 export { createBashFsAdapter } from "./adapters/bash-fs-adapter.js";
 export { createGitFsAdapter } from "./adapters/git-fs-adapter.js";
-export {
-  createBashOperations,
-  createReadOperations,
-  createWriteOperations,
-  createEditOperations,
-  createGrepOperations,
-  createFindOperations,
-  createLsOperations,
-} from "./operations/index.js";
 
 // ─── Re-exports ─────────────────────────────────────────────────────────────
 // Consumers get the key primitives without adding direct dependencies.

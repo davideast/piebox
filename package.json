@@ -1,13 +1,41 @@
 {
-  "name": "pi-lab",
-  "module": "index.ts",
+  "name": "piebox",
+  "version": "0.1.0",
+  "description": "Lightweight in-memory sandbox environment for agent execution",
   "type": "module",
-  "private": true,
-  "devDependencies": {
-    "@types/bun": "latest"
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
-  "peerDependencies": {
-    "typescript": "^5"
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "sandbox",
+    "agent",
+    "in-memory",
+    "virtual-filesystem",
+    "vfs",
+    "ai-agent",
+    "isomorphic-git",
+    "bash"
+  ],
+  "author": "David East",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.74.0",
@@ -15,5 +43,8 @@
     "@platformatic/vfs": "^0.4.0",
     "isomorphic-git": "^1.37.8",
     "just-bash": "^3.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
   }
 }
