@@ -11,6 +11,9 @@
       "import": "./dist/index.js"
     }
   },
+  "bin": {
+    "piebox": "./dist/cli/bin.js"
+  },
   "files": [
     "dist",
     "README.md",
@@ -18,6 +21,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "build-cli": "npx tsx build-cli.ts",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build"
@@ -42,9 +46,12 @@
     "@earendil-works/pi-coding-agent": "^0.74.0",
     "@platformatic/vfs": "^0.4.0",
     "isomorphic-git": "^1.37.8",
-    "just-bash": "^3.0.1"
+    "just-bash": "^3.0.1",
+    "citty": "^0.1.6",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.2"
   }
 }
