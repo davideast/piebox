@@ -26,12 +26,19 @@ import {
   createFindOperations,
   createLsOperations,
 } from "./operations/index.js";
+import { createNpmInfoToolDefinition } from "./tools/npm-info.js";
+
+export interface SandboxedToolsOptions {
+  /** When true, include the npm-info tool (requires network access). */
+  npmInfo?: boolean;
+}
 
 /**
  * Create all SDK tool definitions.
  *
  * - Bash tool → delegates to `Bash.exec()` (just-bash interpreter)
  * - File tools → delegate directly to `VirtualFileSystem` (node:fs API)
+ * - npm-info → queries npm registry via fetch() (when network is enabled)
  *
  * Both operate on the same underlying filesystem because the Bash
  * instance is configured with an IFileSystem adapter over the VFS.
@@ -39,14 +46,16 @@ import {
  * @param cwd - Virtual working directory for all tools
  * @param vfs - @platformatic/vfs VirtualFileSystem (the foundation)
  * @param bash - just-bash Bash instance (configured with VFS adapter)
+ * @param options - Optional tool configuration
  * @returns Array of ToolDefinitions ready for `customTools`
  */
 export function createSandboxedTools(
   cwd: string,
   vfs: VirtualFileSystem,
   bash: Bash,
+  options?: SandboxedToolsOptions,
 ): ToolDefinition[] {
-  return [
+  const tools = [
     createBashToolDefinition(cwd, { operations: createBashOperations(bash) }),
     createReadToolDefinition(cwd, { operations: createReadOperations(vfs) }),
     createWriteToolDefinition(cwd, { operations: createWriteOperations(vfs) }),
@@ -55,4 +64,18 @@ export function createSandboxedTools(
     createFindToolDefinition(cwd, { operations: createFindOperations(vfs) }),
     createLsToolDefinition(cwd, { operations: createLsOperations(vfs) }),
   ] as ToolDefinition[];
+
+  if (options?.npmInfo) {
+    tools.push(
+      createNpmInfoToolDefinition({
+        readFile: (path) => {
+          const resolved = path.startsWith("/") ? path : `${cwd}/${path}`;
+          return vfs.readFileSync(resolved, "utf-8") as string;
+        },
+      }),
+    );
+  }
+
+  return tools as ToolDefinition[];
 }
+

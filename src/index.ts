@@ -36,6 +36,11 @@ export type {
   ExportResult,
 } from "./sandbox.js";
 
+// ─── Secrets ─────────────────────────────────────────────────────────────────────
+
+export { SecretsScrubber, resolveSecrets, generateBootstrap } from "./secrets.js";
+export type { SecretsConfig, SecretsFullConfig, ResolvedSecrets } from "./secrets.js";
+
 // ─── Git ────────────────────────────────────────────────────────────────────
 
 export type { CloneOptions, CloneResult, GitUtilities } from "./git.js";
@@ -54,6 +59,9 @@ export { createSandboxedSession } from "./session.js";
 export type { SandboxSessionOptions, SandboxSessionResult } from "./types.js";
 export { cloneIntoSandbox, createGitUtilities } from "./git.js";
 export { createSandboxedTools } from "./tools.js";
+export type { SandboxedToolsOptions } from "./tools.js";
+export { createNpmInfoToolDefinition } from "./tools/npm-info.js";
+export type { NpmInfoToolOptions } from "./tools/npm-info.js";
 export { createBashFsAdapter } from "./adapters/bash-fs-adapter.js";
 export { createGitFsAdapter } from "./adapters/git-fs-adapter.js";
 
