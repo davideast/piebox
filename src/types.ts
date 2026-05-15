@@ -13,6 +13,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type {
   AuthStorage,
   ModelRegistry,
+  Skill,
   ToolDefinition,
   AgentSession,
 } from "@earendil-works/pi-coding-agent";
@@ -92,6 +93,24 @@ export interface SandboxSessionOptions {
    * These are NOT sandboxed — they have full access to whatever they implement.
    */
   additionalTools?: ToolDefinition[];
+
+  /**
+   * Skills to inject into the agent's system prompt.
+   * Skills provide domain-specific knowledge and instructions
+   * without modifying tools or the VFS.
+   *
+   * Note: Skill files are read from the **host** filesystem at
+   * `loader.reload()` time, not from the VFS.
+   */
+  skills?: Skill[];
+
+  /**
+   * Directories on the host filesystem to scan for SKILL.md files.
+   * Uses standard discovery rules:
+   *   - Directory with SKILL.md = skill root (no further recursion)
+   *   - Otherwise, load direct .md children and recurse subdirectories
+   */
+  skillPaths?: string[];
 }
 
 /** Result from createSandboxedSession. */

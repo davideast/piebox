@@ -32,15 +32,25 @@
 // ─── Primary API ────────────────────────────────────────────────────────────
 
 export { createSandboxedSession } from "./session.js";
+export { cloneIntoSandbox, createGitUtilities } from "./git.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export type { SandboxSessionOptions, SandboxSessionResult } from "./types.js";
+export type { CloneOptions, CloneResult, GitUtilities } from "./git.js";
+
+// ─── Skills ─────────────────────────────────────────────────────────────────
+// Re-exported so consumers can construct Skill objects without a direct
+// dependency on @earendil-works/pi-coding-agent.
+
+export type { Skill } from "@earendil-works/pi-coding-agent";
+export { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";
 
 // ─── Advanced API ───────────────────────────────────────────────────────────
 
 export { createSandboxedTools } from "./tools.js";
 export { createBashFsAdapter } from "./adapters/bash-fs-adapter.js";
+export { createGitFsAdapter } from "./adapters/git-fs-adapter.js";
 export {
   createBashOperations,
   createReadOperations,

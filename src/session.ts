@@ -113,16 +113,29 @@ export async function createSandboxedSession(
     ...(options.systemPrompt ?? []),
   ];
 
+  // Skills are host-filesystem configuration, not VFS content.
+  // Enable skill loading only when the consumer provides skills or skillPaths.
+  const hasSkills = !!(options.skills?.length || options.skillPaths?.length);
+
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir: `${cwd}/.pi`,
     settingsManager,
     noExtensions: true,
-    noSkills: true,
+    noSkills: !hasSkills,
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
     appendSystemPrompt: systemPromptLines,
+    // Directory-based skill discovery (host filesystem)
+    additionalSkillPaths: options.skillPaths ?? [],
+    // Programmatic skill injection
+    skillsOverride: options.skills
+      ? (current) => ({
+          skills: [...current.skills, ...options.skills!],
+          diagnostics: current.diagnostics,
+        })
+      : undefined,
   });
   await resourceLoader.reload();
 
