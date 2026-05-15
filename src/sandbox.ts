@@ -14,7 +14,7 @@
  *
  * @example
  * ```ts
- * import { sandbox } from "pi-sandbox";
+ * import { sandbox } from "piebox";
  * import { getModel } from "@earendil-works/pi-ai";
  *
  * const sb = sandbox();
@@ -335,7 +335,7 @@ function buildSystemPrompt(options?: SandboxOptions): string[] {
  *
  * @example
  * ```ts
- * import { sandbox } from "pi-sandbox";
+ * import { sandbox } from "piebox";
  *
  * const sb = sandbox();
  * sb.fs.writeFileSync("/sandbox/hello.txt", "world");

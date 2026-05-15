@@ -1,5 +1,5 @@
 /**
- * Public types for the pi-sandbox library.
+ * Public types for the piebox library.
  *
  * Architecture:
  *   @platformatic/vfs  ← foundation (node:fs-compatible in-memory filesystem)

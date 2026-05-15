@@ -1,5 +1,5 @@
 /**
- * pi-sandbox — Lightweight in-memory sandbox environment for agent execution.
+ * piebox — Lightweight in-memory sandbox environment for agent execution.
  *
  * Architecture:
  *   sandbox.fs     ← @platformatic/vfs (node:fs-compatible in-memory filesystem)
@@ -8,7 +8,7 @@
  *
  * @example
  * ```ts
- * import { sandbox } from "pi-sandbox";
+ * import { sandbox } from "piebox";
  * import { getModel } from "@earendil-works/pi-ai";
  *
  * const sb = sandbox();
