@@ -3,16 +3,18 @@ import { RunInputSchema } from "./spec.js";
 import type { Result } from "../shared/result.js";
 import { ok, fail } from "../shared/result.js";
 import { SandboxManager } from "../../sandbox-manager.js";
+import type { SandboxRuntimeConfig } from "../../sandbox-manager.js";
 import { sandbox } from "../../../sandbox.js";
 import type { SandboxInstance } from "../../../sandbox.js";
 import type { ICloneService } from "../clone/spec.js";
 import type { ICommitService } from "../commit/handler.js";
 import type { IExportService } from "../export/spec.js";
+import { sessionId } from "../../utils/session-id.js";
 import { getModel } from "@earendil-works/pi-ai";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { appendFile } from "node:fs";
-import { NormalizerState, normalize, MultiAdapter, TTYAdapter, MarkdownAdapter } from "../../streaming/index.js";
+import { NormalizerState, normalize, MultiAdapter, TTYAdapter, MarkdownAdapter, NifttyAdapter } from "../../streaming/index.js";
 import type { StreamAdapter, StreamEvent } from "../../streaming/index.js";
 import type { FileEntry } from "../../streaming/events.js";
 
@@ -54,6 +56,12 @@ export class RunHandler implements IRunService {
     const sandboxName = opts.sandboxName!;
     const startTime = Date.now();
 
+    // Build runtime config from CLI flags
+    const runtimeConfig: SandboxRuntimeConfig | undefined =
+      opts.runtime || opts.network
+        ? { runtime: opts.runtime, network: opts.network }
+        : undefined;
+
     // 1. Ensure sandbox exists
     this.log(opts, `🔧 Sandbox: ${sandboxName}`);
 
@@ -66,11 +74,17 @@ export class RunHandler implements IRunService {
         }
         this.log(opts, `  ✓ Cloned`);
       } else {
-        await this.manager.create(sandboxName);
+        await this.manager.create(sandboxName, undefined, runtimeConfig);
         this.log(opts, `  ✓ Created empty sandbox`);
       }
     } else {
       this.log(opts, `  ✓ Loaded existing sandbox`);
+    }
+
+    // Persist runtime config if flags were passed (updates existing sandboxes too)
+    if (runtimeConfig) {
+      await this.manager.updateRuntimeConfig(sandboxName, runtimeConfig);
+      this.log(opts, `  ✓ Runtime: ${runtimeConfig.runtime ?? 'default'}${runtimeConfig.network?.length ? ` + ${runtimeConfig.network.length} network origins` : ''}`);
     }
 
     // 2. Load sandbox and create session directly (for streaming)
@@ -102,9 +116,10 @@ export class RunHandler implements IRunService {
     }
 
     // Setup logging + streaming
-    const logsDir = path.join(process.cwd(), "logs");
+    const runSessionId = sessionId(sandboxName);
+    const logsDir = path.join(".piebox", "logs");
     if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
-    const logFile = path.join(logsDir, `${sandboxName}.jsonl`);
+    const logFile = path.join(logsDir, `${runSessionId}.jsonl`);
     await this.setupStreaming(session, logFile, opts);
 
     try {
@@ -173,6 +188,7 @@ export class RunHandler implements IRunService {
 
     return ok({
       sandboxName,
+      sessionId: runSessionId,
       elapsedMs,
       newFiles,
       modifiedFiles,
@@ -181,6 +197,7 @@ export class RunHandler implements IRunService {
       bytesWritten: 0,
       commitSha,
       logFile,
+      runtimeConfig,
     });
   }
 
@@ -269,13 +286,13 @@ export class RunHandler implements IRunService {
     }
 
     // Setup logging
-    const logsDir = path.join(hostDir, "logs");
+    const logsDir = path.join(hostDir, ".piebox", "logs");
     if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
 
-    const runId = `run-${Date.now()}`;
-    const logFile = path.join(logsDir, `${runId}.jsonl`);
+    const runSessionId = sessionId(opts.sandboxName ?? "local");
+    const logFile = path.join(logsDir, `${runSessionId}.jsonl`);
 
-    this.log(opts, `📝 Run: ${runId}`);
+    this.log(opts, `📝 Session: ${runSessionId}`);
     this.log(opts, `   Log: ${path.relative(hostDir, logFile)}\n`);
 
     // Subscribe to events for streaming UX
@@ -345,7 +362,7 @@ export class RunHandler implements IRunService {
 
     // Extract to disk
     const applyDirectly = opts.apply;
-    const outputDir = applyDirectly ? hostDir : path.join(outputBase, runId);
+    const outputDir = applyDirectly ? hostDir : path.join(outputBase, runSessionId);
     const changedFiles = [...newFiles, ...modifiedFiles];
     let bytesWritten = 0;
 
@@ -382,7 +399,7 @@ export class RunHandler implements IRunService {
     this.log(opts, "✓ Done.");
 
     return ok({
-      runId,
+      sessionId: runSessionId,
       elapsedMs,
       newFiles,
       modifiedFiles,
@@ -533,6 +550,10 @@ export class RunHandler implements IRunService {
     const adapters: StreamAdapter[] = [];
     if (!opts.quiet) {
       adapters.push(new TTYAdapter(opts.verbose ?? false));
+      // Syntax-highlighted diffs for file mutations (TTY only)
+      if (process.stderr.isTTY) {
+        adapters.push(new NifttyAdapter());
+      }
     }
     // Write markdown session log next to the JSONL log
     const mdPath = logFile.replace(/\.jsonl$/, ".md");

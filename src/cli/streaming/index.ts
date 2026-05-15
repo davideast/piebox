@@ -6,3 +6,4 @@ export type { StreamAdapter } from "./adapter.js";
 export { MultiAdapter } from "./adapter.js";
 export { TTYAdapter } from "./adapters/tty.js";
 export { MarkdownAdapter } from "./adapters/markdown.js";
+export { NifttyAdapter } from "./adapters/niftty.js";
