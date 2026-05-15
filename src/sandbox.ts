@@ -52,8 +52,32 @@ import { createBashFsAdapter } from "./adapters/bash-fs-adapter.js";
 import { createSandboxedTools } from "./tools.js";
 import { loadSkillsFromVFS } from "./skills.js";
 import { cloneIntoSandbox, createGitUtilities, type CloneOptions, type GitUtilities } from "./git.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join, dirname, posix } from "node:path";
 
 // ─── Public Types ───────────────────────────────────────────────────────────
+
+/** Serialized representation of an entire VFS state. */
+export interface VFSSnapshot {
+  version: 1;
+  files: Array<{
+    path: string;
+    content: string;
+    encoding: "utf-8" | "base64";
+  }>;
+}
+
+/** Options for exporting VFS contents to the host filesystem. */
+export interface ExportOptions {
+  include?: string[];
+}
+
+/** Result of an export operation. */
+export interface ExportResult {
+  filesWritten: number;
+  bytesWritten: number;
+  paths: string[];
+}
 
 /** Options for creating a sandbox environment. */
 export interface SandboxOptions {
@@ -75,6 +99,12 @@ export interface SandboxOptions {
    * The `fs` and `cwd` fields are managed by the sandbox.
    */
   bashOptions?: Omit<BashOptions, "fs" | "cwd">;
+
+  /**
+   * Snapshot to initialize the VFS from.
+   * If provided, the VFS will be populated with these files before any further setup.
+   */
+  snapshot?: VFSSnapshot;
 }
 
 /** Options for creating an agent session within a sandbox. */
@@ -154,6 +184,20 @@ export interface SandboxInstance {
    * ```
    */
   createSession(options: SessionOptions): Promise<AgentSession>;
+
+  /**
+   * Take a snapshot of the current VFS state.
+   * Can be passed to `sandbox({ snapshot })` to restore the state later.
+   */
+  snapshot(): VFSSnapshot;
+
+  /**
+   * Export the sandbox VFS contents to the host filesystem.
+   *
+   * @param dir The destination directory on the host filesystem.
+   * @param options Additional export options (e.g. glob filters).
+   */
+  export(dir: string, options?: ExportOptions): Promise<ExportResult>;
 }
 
 /** Clone options scoped to the sandbox (url is required, dir defaults to cwd). */
@@ -196,6 +240,17 @@ export function sandbox(options?: SandboxOptions): SandboxInstance {
     cwd,
     ...options?.bashOptions,
   });
+
+  // Restore from snapshot if provided
+  if (options?.snapshot) {
+    for (const file of options.snapshot.files) {
+      const dir = posix.dirname(file.path);
+      try {
+        vfs.mkdirSync(dir, { recursive: true });
+      } catch {}
+      vfs.writeFileSync(file.path, file.content, file.encoding);
+    }
+  }
 
   // Ensure cwd exists
   try {
@@ -291,6 +346,90 @@ export function sandbox(options?: SandboxOptions): SandboxInstance {
       });
 
       return session;
+    },
+
+    snapshot(): VFSSnapshot {
+      const files: VFSSnapshot["files"] = [];
+      const walk = (dir: string) => {
+        let entries;
+        try {
+          entries = vfs.readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const entry of entries) {
+          const fullPath = posix.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            walk(fullPath);
+          } else if (entry.isFile()) {
+            try {
+              const content = vfs.readFileSync(fullPath, "utf-8");
+              files.push({
+                path: fullPath,
+                content: content.toString(),
+                encoding: "utf-8",
+              });
+            } catch {
+              // Ignore unreadable files
+            }
+          }
+        }
+      };
+
+      walk("/");
+
+      return {
+        version: 1,
+        files,
+      };
+    },
+
+    async export(dir: string, exportOptions?: ExportOptions): Promise<ExportResult> {
+      let filesWritten = 0;
+      let bytesWritten = 0;
+      const paths: string[] = [];
+
+      const walkExport = async (vfsDir: string) => {
+        let entries;
+        try {
+          entries = vfs.readdirSync(vfsDir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+
+        for (const entry of entries) {
+          const vfsPath = posix.join(vfsDir, entry.name);
+          const relativePath = posix.relative("/", vfsPath);
+          const hostPath = join(dir, relativePath);
+
+          if (entry.isDirectory()) {
+            await walkExport(vfsPath);
+          } else if (entry.isFile()) {
+            if (exportOptions?.include && exportOptions.include.length > 0) {
+              const matches = exportOptions.include.some(pattern => {
+                const regex = new RegExp("^" + pattern.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$");
+                return regex.test(relativePath) || regex.test(vfsPath);
+              });
+              if (!matches) continue;
+            }
+
+            try {
+              const content = vfs.readFileSync(vfsPath, "utf-8");
+              await mkdir(dirname(hostPath), { recursive: true });
+              await writeFile(hostPath, content, "utf-8");
+              filesWritten++;
+              bytesWritten += Buffer.byteLength(content, "utf-8");
+              paths.push(hostPath);
+            } catch {
+              // ignore
+            }
+          }
+        }
+      };
+
+      await walkExport("/");
+
+      return { filesWritten, bytesWritten, paths };
     },
   };
 }

@@ -31,6 +31,9 @@ export type {
   SandboxInstance,
   SandboxCloneOptions,
   SessionOptions,
+  VFSSnapshot,
+  ExportOptions,
+  ExportResult,
 } from "./sandbox.js";
 
 // ─── Git ────────────────────────────────────────────────────────────────────
