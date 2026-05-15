@@ -45,6 +45,8 @@ export type { CloneOptions, CloneResult, GitUtilities } from "./git.js";
 
 export type { Skill } from "@earendil-works/pi-coding-agent";
 export { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";
+export { loadSkillsFromVFS } from "./skills.js";
+export type { LoadSkillsFromVFSOptions } from "./skills.js";
 
 // ─── Advanced API ───────────────────────────────────────────────────────────
 
