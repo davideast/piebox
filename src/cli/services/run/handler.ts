@@ -164,7 +164,11 @@ export class RunHandler implements IRunService {
       filesWritten = exportRes.data.filesWritten;
     }
 
+    const mdFile = logFile.replace(/\.jsonl$/, ".md");
+
     this.log(opts, `\n  Sandbox: ${sandboxName}`);
+    this.log(opts, `  Session: ${path.relative(process.cwd(), mdFile)}`);
+    this.log(opts, `  Log:     ${path.relative(process.cwd(), logFile)}`);
     this.log(opts, `  To continue: piebox run "next prompt" -s ${sandboxName}`);
 
     return ok({
