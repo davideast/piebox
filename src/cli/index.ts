@@ -1,7 +1,6 @@
 import { defineCommand, runMain } from "citty";
 import { SandboxManager } from "./sandbox-manager.js";
 import { CloneHandler } from "./services/clone/handler.js";
-import { PromptHandler } from "./services/prompt/handler.js";
 import { CommitHandler } from "./services/commit/handler.js";
 import { ExportHandler } from "./services/export/handler.js";
 import { RunHandler } from "./services/run/handler.js";
@@ -10,10 +9,9 @@ import { formatOutput } from "./utils/output.js";
 
 const manager = new SandboxManager();
 const cloneHandler = new CloneHandler(manager);
-const promptHandler = new PromptHandler(manager);
 const commitHandler = new CommitHandler(manager);
 const exportHandler = new ExportHandler(manager);
-const runHandler = new RunHandler(cloneHandler, promptHandler, commitHandler, exportHandler, manager);
+const runHandler = new RunHandler(cloneHandler, commitHandler, exportHandler, manager);
 
 function getName(args: Record<string, unknown>): string {
   if (typeof args.sandbox === "string" && args.sandbox.length > 0) return args.sandbox;
@@ -108,19 +106,6 @@ const cloneCommand = defineCommand({
   }
 });
 
-const promptCommand = defineCommand({
-  meta: { name: "prompt", description: "Send a prompt to an existing sandbox" },
-  args: {
-    prompt: { type: "positional", description: "Prompt", required: true },
-    sandbox: { type: "string", alias: "s", description: "Sandbox name", required: true },
-    model: { type: "string", description: "Model" },
-    json: { type: "boolean" }
-  },
-  async run({ args }) {
-    const result = await promptHandler.execute({ prompt: args.prompt, sandboxName: args.sandbox, model: args.model });
-    formatOutput(result, { json: args.json, tty: process.stdout.isTTY });
-  }
-});
 
 const commitCommand = defineCommand({
   meta: { name: "commit", description: "Commit changes in the sandbox" },
@@ -198,7 +183,6 @@ const mainCommand = defineCommand({
   subCommands: {
     run: runCommand,
     clone: cloneCommand,
-    prompt: promptCommand,
     commit: commitCommand,
     export: exportCommand,
     diff: diffCommand,

@@ -6,7 +6,6 @@ import { SandboxManager } from "../../sandbox-manager.js";
 import { sandbox } from "../../../sandbox.js";
 import type { SandboxInstance } from "../../../sandbox.js";
 import type { ICloneService } from "../clone/spec.js";
-import type { IPromptService } from "../prompt/spec.js";
 import type { ICommitService } from "../commit/handler.js";
 import type { IExportService } from "../export/spec.js";
 import { getModel } from "@earendil-works/pi-ai";
@@ -26,7 +25,6 @@ import { appendFile } from "node:fs";
 export class RunHandler implements IRunService {
   constructor(
     private cloneHandler: ICloneService,
-    private promptHandler: IPromptService,
     private commitHandler: ICommitService,
     private exportHandler: IExportService,
     private manager: SandboxManager,
