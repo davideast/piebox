@@ -1,6 +1,9 @@
 import { defineCommand, runMain } from "citty";
 import { runCommand } from "./commands/run.js";
-import { cloneCommand, commitCommand, exportCommand, diffCommand } from "./commands/repo.js";
+import { cloneCommand } from "./commands/clone.js";
+import { commitCommand } from "./commands/commit.js";
+import { exportCommand } from "./commands/export.js";
+import { diffCommand } from "./commands/diff.js";
 import { sandboxListCommand, sandboxDestroyCommand } from "./commands/sandbox.js";
 
 const mainCommand = defineCommand({
