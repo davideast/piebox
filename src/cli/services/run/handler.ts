@@ -526,7 +526,12 @@ export class RunHandler implements IRunService {
 
   private setupStreaming(session: any, logFile: string, opts: RunInput): void {
     let thinkingBuffer = "";
-    let lastWasThinking = false;
+    let consecutiveBash = 0;
+    const MAX_BASH_SHOWN = 5;
+
+    const log = (msg: string) => {
+      if (!opts.quiet) process.stderr.write(msg + "\n");
+    };
 
     session.subscribe((event: any) => {
       appendFile(logFile, JSON.stringify(event) + "\n", () => {});
@@ -534,59 +539,71 @@ export class RunHandler implements IRunService {
       if (event.type !== "message_update") return;
       const inner = event.assistantMessageEvent;
 
+      // ── Thinking (verbose only) ───────────────────────────────────
       if (inner.type === "thinking_delta") {
         thinkingBuffer += inner.delta ?? "";
-        const firstSentence = thinkingBuffer.match(/^[^.!?\n]+[.!?\n]/)?.[0];
-        if (firstSentence && !lastWasThinking) {
-          const brief = firstSentence.trim().slice(0, 100);
-          if (!opts.quiet) process.stderr.write(`  💭 ${brief}\n`);
-          lastWasThinking = true;
-        }
+        return;
       }
-
       if (inner.type === "thinking_end") {
+        if (opts.verbose && thinkingBuffer.length > 0) {
+          const clean = thinkingBuffer
+            .replace(/\*\*/g, "")
+            .replace(/\n+/g, " ")
+            .trim()
+            .slice(0, 80);
+          if (clean) log(`  💭 ${clean}`);
+        }
         thinkingBuffer = "";
-        lastWasThinking = false;
+        return;
       }
 
+      // ── Tool calls ────────────────────────────────────────────────
       if (inner.type === "toolcall_end") {
-        lastWasThinking = false;
         const tc = inner.toolCall ?? {};
         const name: string = tc.name ?? "";
-        const args = tc.args ?? {};
-        const strip = (p: string) =>
-          typeof p === "string" ? p.replace(/^\/sandbox\//, "") : "";
+        const args = tc.arguments ?? {};
 
-        let line = "";
-        switch (name) {
-          case "read": {
-            const p = strip(args.path ?? "");
-            if (p) line = `  📖 Reading ${p}`;
-            break;
-          }
-          case "write":
-            line = `  ✏️  Creating ${strip(args.path ?? "")}`;
-            break;
-          case "edit":
-            line = `  ✏️  Editing ${strip(args.path ?? "")}`;
-            break;
-          case "bash": {
-            const cmd = typeof args.command === "string" ? args.command : "";
-            line = `  $ ${cmd.length > 70 ? cmd.slice(0, 67) + "..." : cmd}`;
-            break;
-          }
-          case "grep":
-            line = `  🔍 Searching for "${args.query ?? args.pattern ?? ""}"`;
-            break;
-          case "find":
-            line = `  🔍 Finding files ${args.pattern ? `matching ${args.pattern}` : ""}`;
-            break;
-          case "ls":
-            line = `  📂 Listing ${strip(args.path ?? "")}`;
-            break;
+        // File mutations — always shown
+        if (name === "write") {
+          consecutiveBash = 0;
+          const p = args.path ?? "?";
+          log(`  + ${p}`);
+          return;
+        }
+        if (name === "edit") {
+          consecutiveBash = 0;
+          const p = args.path ?? "?";
+          log(`  ~ ${p}`);
+          return;
         }
 
-        if (line && !opts.quiet) process.stderr.write(line + "\n");
+        // Everything else — verbose only
+        if (!opts.verbose) return;
+
+        // Flush bash overflow before non-bash tools
+        if (name !== "bash" && consecutiveBash > MAX_BASH_SHOWN) {
+          log(`  ... (${consecutiveBash - MAX_BASH_SHOWN} more)`);
+          consecutiveBash = 0;
+        }
+
+        if (name === "bash") {
+          const cmd = typeof args.command === "string" ? args.command : "";
+          consecutiveBash++;
+          if (consecutiveBash <= MAX_BASH_SHOWN) {
+            log(`  $ ${cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd}`);
+          }
+          return;
+        }
+
+        consecutiveBash = 0;
+        if (name === "ls") {
+          log(`  📂 ${args.path ?? "."}`);
+        } else if (name === "grep") {
+          log(`  🔍 grep ${args.query ?? args.pattern ?? ""}`);
+        } else if (name === "find") {
+          log(`  🔍 find ${args.pattern ?? ""}`);
+        }
+        // read is intentionally silent
       }
 
       if (inner.type === "text_delta" && opts.verbose) {
