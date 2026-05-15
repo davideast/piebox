@@ -1,8 +1,8 @@
 import * as fs from "node:fs/promises";
-import * as fsSync from "node:fs";
 import * as path from "node:path";
 import { posix } from "node:path";
 import { sandbox } from "../sandbox.js";
+import { createGitUtilities } from "../git.js";
 import type { SandboxInstance } from "../sandbox.js";
 import { writeTarGz, readTarGz } from "./tar.js";
 import type { TarEntry } from "./tar.js";
@@ -12,6 +12,8 @@ export interface SandboxMetadata {
   createdAt: string;
   updatedAt: string;
   gitUrl?: string;
+  /** The cwd used when the sandbox was created/cloned. */
+  cwd?: string;
 }
 
 export class SandboxManager {
@@ -64,10 +66,13 @@ export class SandboxManager {
     const tarPath = path.join(dir, "snapshot.tar.gz");
     const jsonPath = path.join(dir, "snapshot.json");
 
+    // Read metadata for cwd
+    const cwd = await this.readCwd(name);
+
     // Try tar.gz first (new format)
     try {
       await fs.stat(tarPath);
-      return await this.loadFromTar(tarPath);
+      return await this.loadFromTar(tarPath, cwd);
     } catch {
       // Fall through to JSON
     }
@@ -77,6 +82,9 @@ export class SandboxManager {
       const snapshotStr = await fs.readFile(jsonPath, "utf-8");
       const snapshot = JSON.parse(snapshotStr);
       const sb = sandbox({ snapshot });
+
+      // Re-initialize git if .git/ exists
+      this.initGitIfPresent(sb, cwd);
 
       // Auto-migrate: save as tar.gz, delete JSON
       await this.save(name, sb);
@@ -97,13 +105,10 @@ export class SandboxManager {
     const dir = this.getSandboxDir(name);
     await fs.mkdir(dir, { recursive: true });
 
-    // Walk VFS and collect entries
+    // Walk VFS and collect entries — preserving binary data
     const entries: TarEntry[] = [];
     this.walkVFS(sb, "/", (filePath, content) => {
-      entries.push({
-        path: filePath,
-        content: Buffer.from(content, "utf-8"),
-      });
+      entries.push({ path: filePath, content });
     });
 
     // Atomic write: temp file → rename
@@ -113,18 +118,20 @@ export class SandboxManager {
     await writeTarGz(tmpPath, entries);
     await fs.rename(tmpPath, finalPath);
 
-    // Update metadata
+    // Update metadata (preserve cwd for git re-init on load)
     const metadataPath = path.join(dir, "metadata.json");
     let metadata: SandboxMetadata;
     try {
       const metadataStr = await fs.readFile(metadataPath, "utf-8");
       metadata = JSON.parse(metadataStr);
       metadata.updatedAt = new Date().toISOString();
+      metadata.cwd = metadata.cwd ?? sb.cwd;
     } catch {
       metadata = {
         name,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
+        cwd: sb.cwd,
       };
     }
     await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
@@ -164,7 +171,33 @@ export class SandboxManager {
 
   // ── Private helpers ──────────────────────────────────────────────
 
-  private async loadFromTar(tarPath: string): Promise<SandboxInstance> {
+  private async readCwd(name: string): Promise<string> {
+    try {
+      const metadataStr = await fs.readFile(
+        path.join(this.getSandboxDir(name), "metadata.json"),
+        "utf-8"
+      );
+      const metadata: SandboxMetadata = JSON.parse(metadataStr);
+      return metadata.cwd ?? "/sandbox";
+    } catch {
+      return "/sandbox";
+    }
+  }
+
+  /**
+   * If the VFS contains a `.git/HEAD` file, re-initialize GitUtilities.
+   * This restores git operations (diff, commit, branch) after a load.
+   */
+  private initGitIfPresent(sb: SandboxInstance, cwd: string): void {
+    try {
+      sb.fs.statSync(`${cwd}/.git/HEAD`);
+      sb.git = createGitUtilities(sb.fs, cwd);
+    } catch {
+      // No git state — leave sb.git as null
+    }
+  }
+
+  private async loadFromTar(tarPath: string, cwd: string): Promise<SandboxInstance> {
     const entries = await readTarGz(tarPath);
     const sb = sandbox();
 
@@ -175,16 +208,26 @@ export class SandboxManager {
       } catch {
         // Directory may already exist
       }
-      sb.fs.writeFileSync(entry.path, entry.content.toString("utf-8"));
+
+      // Write as Buffer to preserve binary content (git packfiles, index)
+      sb.fs.writeFileSync(entry.path, entry.content);
     }
+
+    // Re-initialize git if .git/ exists in the restored VFS
+    this.initGitIfPresent(sb, cwd);
 
     return sb;
   }
 
+  /**
+   * Walk the VFS and collect file contents as Buffers.
+   * Reading without encoding returns the raw Buffer, preserving binary data
+   * (critical for git packfiles, index, and any non-text files).
+   */
   private walkVFS(
     sb: SandboxInstance,
     dir: string,
-    callback: (path: string, content: string) => void,
+    callback: (path: string, content: Buffer) => void,
   ): void {
     try {
       const entries = sb.fs.readdirSync(dir, { withFileTypes: true });
@@ -194,7 +237,11 @@ export class SandboxManager {
           if (entry.isDirectory()) {
             this.walkVFS(sb, fullPath, callback);
           } else if (entry.isFile()) {
-            const content = sb.fs.readFileSync(fullPath, "utf-8") as string;
+            // Read without encoding to get raw Buffer — preserves binary
+            const raw = sb.fs.readFileSync(fullPath);
+            const content = Buffer.isBuffer(raw)
+              ? raw
+              : Buffer.from(String(raw), "utf-8");
             callback(fullPath, content);
           }
         } catch {
