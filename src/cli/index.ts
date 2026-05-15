@@ -4,6 +4,7 @@ import { cloneCommand } from "./commands/clone.js";
 import { commitCommand } from "./commands/commit.js";
 import { exportCommand } from "./commands/export.js";
 import { diffCommand } from "./commands/diff.js";
+import { filesCommand, readCommand } from "./commands/inspect.js";
 import { sandboxListCommand, sandboxDestroyCommand } from "./commands/sandbox.js";
 
 const mainCommand = defineCommand({
@@ -18,6 +19,8 @@ const mainCommand = defineCommand({
     commit: commitCommand,
     export: exportCommand,
     diff: diffCommand,
+    files: filesCommand,
+    read: readCommand,
     sandbox: defineCommand({
       meta: { name: "sandbox", description: "Manage sandboxes" },
       subCommands: {
@@ -31,3 +34,4 @@ const mainCommand = defineCommand({
 export function runCli() {
   runMain(mainCommand);
 }
+
