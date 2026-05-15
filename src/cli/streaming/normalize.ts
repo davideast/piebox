@@ -31,14 +31,28 @@ export function normalize(raw: any, state: NormalizerState): StreamEvent | null 
     const tc = inner.toolCall ?? {};
     const name: string = tc.name ?? "";
     const args = tc.arguments ?? {};
+    const result = tc.result ?? {};
 
     switch (name) {
       case "write":
-        return { type: "file_create", path: args.path ?? "?" };
+        return {
+          type: "file_create",
+          path: args.path ?? "?",
+          content: typeof args.content === "string" ? args.content : "",
+          language: langFromPath(args.path ?? ""),
+        };
       case "edit":
-        return { type: "file_edit", path: args.path ?? "?" };
+        return {
+          type: "file_edit",
+          path: args.path ?? "?",
+          diff: buildDiff(args),
+        };
       case "bash":
-        return { type: "bash", command: typeof args.command === "string" ? args.command : "" };
+        return {
+          type: "bash",
+          command: typeof args.command === "string" ? args.command : "",
+          output: typeof result.output === "string" ? result.output : "",
+        };
       case "read":
         return { type: "file_read", path: args.path ?? "" };
       case "ls":
@@ -58,4 +72,33 @@ export function normalize(raw: any, state: NormalizerState): StreamEvent | null 
   }
 
   return null;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+const EXT_MAP: Record<string, string> = {
+  ts: "ts", tsx: "tsx", js: "js", jsx: "jsx",
+  py: "python", rs: "rust", go: "go", rb: "ruby",
+  json: "json", md: "markdown", yaml: "yaml", yml: "yaml",
+  sh: "bash", bash: "bash", zsh: "bash",
+  html: "html", css: "css", sql: "sql", xml: "xml",
+  toml: "toml", ini: "ini", cfg: "ini",
+  dockerfile: "dockerfile",
+};
+
+/** Infer fenced code block language from file extension. */
+export function langFromPath(filePath: string): string {
+  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+  return EXT_MAP[ext] ?? "";
+}
+
+/** Build a unified-style diff from edit tool arguments. */
+function buildDiff(args: Record<string, any>): string {
+  const oldStr = typeof args.old_string === "string" ? args.old_string : "";
+  const newStr = typeof args.new_string === "string" ? args.new_string : "";
+  if (!oldStr && !newStr) return "";
+
+  const oldLines = oldStr.split("\n").map((l: string) => `- ${l}`);
+  const newLines = newStr.split("\n").map((l: string) => `+ ${l}`);
+  return [...oldLines, ...newLines].join("\n");
 }

@@ -24,6 +24,7 @@ export interface SessionStartEvent {
   type: "session_start";
   model: string;
   sandbox: string;
+  prompt: string;
   timestamp: number;
 }
 
@@ -35,16 +36,20 @@ export interface ThinkingEvent {
 export interface FileCreateEvent {
   type: "file_create";
   path: string;
+  content: string;
+  language: string;
 }
 
 export interface FileEditEvent {
   type: "file_edit";
   path: string;
+  diff: string;
 }
 
 export interface BashEvent {
   type: "bash";
   command: string;
+  output: string;
 }
 
 export interface FileReadEvent {
@@ -68,6 +73,12 @@ export interface TextDeltaEvent {
   delta: string;
 }
 
+export interface FileEntry {
+  path: string;
+  bytes: number;
+  status: "new" | "modified" | "unchanged";
+}
+
 export interface SessionEndEvent {
   type: "session_end";
   durationMs: number;
@@ -75,6 +86,7 @@ export interface SessionEndEvent {
   modifiedFiles: string[];
   unchangedCount: number;
   toolCalls: number;
+  fileTree: FileEntry[];
 }
 
 export interface ErrorEvent {
@@ -100,9 +112,7 @@ export class NormalizerState {
     if (this.thinkingBuffer.length === 0) return null;
     const cleaned = this.thinkingBuffer
       .replace(/\*\*/g, "")
-      .replace(/\n+/g, " ")
-      .trim()
-      .slice(0, 120);
+      .trim();
     this.thinkingBuffer = "";
     return cleaned || null;
   }

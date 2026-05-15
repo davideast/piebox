@@ -13,7 +13,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { appendFile } from "node:fs";
 import { NormalizerState, normalize, MultiAdapter, TTYAdapter, MarkdownAdapter } from "../../streaming/index.js";
-import type { StreamAdapter } from "../../streaming/index.js";
+import type { StreamAdapter, StreamEvent } from "../../streaming/index.js";
+import type { FileEntry } from "../../streaming/events.js";
 
 /**
  * RunHandler — the orchestrator.
@@ -121,22 +122,27 @@ export class RunHandler implements IRunService {
     // Detect changes by comparing before/after VFS
     const newFiles: string[] = [];
     const modifiedFiles: string[] = [];
+    const fileTree: FileEntry[] = [];
     let unchangedCount = 0;
     let toolCalls = 0;
 
     this.walkVFSFlat(sb, sb.cwd, sb.cwd, (relPath, content) => {
-      toolCalls++; // approximate from VFS entries
+      toolCalls++;
+      const bytes = Buffer.byteLength(content, "utf-8");
       if (!filesBefore.has(relPath)) {
         newFiles.push(relPath);
+        fileTree.push({ path: relPath, bytes, status: "new" });
       } else if (contentsBefore.get(relPath) !== content) {
         modifiedFiles.push(relPath);
+        fileTree.push({ path: relPath, bytes, status: "modified" });
       } else {
         unchangedCount++;
+        fileTree.push({ path: relPath, bytes, status: "unchanged" });
       }
     });
 
     // Emit session_end through the pipeline (TTY + Markdown adapters)
-    await this.teardownStreaming(opts, startTime, newFiles, modifiedFiles, unchangedCount, toolCalls);
+    await this.teardownStreaming(opts, startTime, newFiles, modifiedFiles, unchangedCount, toolCalls, fileTree);
 
     // 3. Commit
     let commitSha: string | undefined;
@@ -537,6 +543,7 @@ export class RunHandler implements IRunService {
       type: "session_start",
       model: opts.model ?? "default",
       sandbox: opts.sandboxName ?? "anonymous",
+      prompt: opts.prompt ?? "",
       timestamp: Date.now(),
     });
 
@@ -557,6 +564,7 @@ export class RunHandler implements IRunService {
     modifiedFiles: string[],
     unchangedCount: number,
     toolCalls: number,
+    fileTree: FileEntry[],
   ): Promise<void> {
     if (!this.adapter) return;
     this.adapter.write({
@@ -566,6 +574,7 @@ export class RunHandler implements IRunService {
       modifiedFiles,
       unchangedCount,
       toolCalls,
+      fileTree,
     });
     await this.adapter.end?.();
     this.adapter = undefined;

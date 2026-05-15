@@ -1,5 +1,5 @@
 // Streaming output pipeline
-export type { StreamEvent } from "./events.js";
+export type { StreamEvent, FileEntry } from "./events.js";
 export { NormalizerState } from "./events.js";
 export { normalize } from "./normalize.js";
 export type { StreamAdapter } from "./adapter.js";
