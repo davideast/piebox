@@ -30,9 +30,9 @@ export class MultiAdapter implements StreamAdapter {
     }
   }
 
-  write(event: StreamEvent): void {
+  async write(event: StreamEvent): Promise<void> {
     for (const a of this.adapters) {
-      a.write(event);
+      await a.write(event);
     }
   }
 

@@ -162,8 +162,9 @@ export class NifttyAdapter implements StreamAdapter {
       // Track for potential rewind
       this.lastRenderLines.set(filePath, frameLines.length);
       this.lastRenderedFile = filePath;
-    } catch {
-      // Fallback: just print the path (TTYAdapter already does this)
+    } catch (err) {
+      // Log rendering errors for debugging — TTYAdapter handles the fallback display
+      process.stderr.write(`  ⚠ niftty render failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   }
 }

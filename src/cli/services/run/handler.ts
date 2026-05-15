@@ -572,13 +572,18 @@ export class RunHandler implements IRunService {
       timestamp: Date.now(),
     });
 
+    // Queue for sequential async adapter writes (niftty rendering is async)
+    let writeQueue = Promise.resolve();
+
     session.subscribe((event: any) => {
       // Raw log (always)
       appendFile(logFile, JSON.stringify(event) + "\n", () => {});
 
-      // Normalize → adapt
+      // Normalize → adapt (chained to ensure sequential rendering)
       const normalized = normalize(event, state);
-      if (normalized) adapter.write(normalized);
+      if (normalized) {
+        writeQueue = writeQueue.then(() => adapter.write(normalized)).catch(() => {});
+      }
     });
   }
 
