@@ -12,6 +12,8 @@ import { getModel } from "@earendil-works/pi-ai";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { appendFile } from "node:fs";
+import { NormalizerState, normalize, MultiAdapter, TTYAdapter, MarkdownAdapter } from "../../streaming/index.js";
+import type { StreamAdapter } from "../../streaming/index.js";
 
 /**
  * RunHandler — the orchestrator.
@@ -87,7 +89,7 @@ export class RunHandler implements IRunService {
     });
 
     const modelName = opts.model ?? "gemini-3.1-pro-preview";
-    this.log(opts, `\n🤖 Prompting ${modelName}...`);
+
 
     let session;
     try {
@@ -102,7 +104,7 @@ export class RunHandler implements IRunService {
     const logsDir = path.join(process.cwd(), "logs");
     if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
     const logFile = path.join(logsDir, `${sandboxName}.jsonl`);
-    this.setupStreaming(session, logFile, opts);
+    await this.setupStreaming(session, logFile, opts);
 
     try {
       await session.prompt(opts.prompt);
@@ -112,8 +114,6 @@ export class RunHandler implements IRunService {
     }
 
     const elapsedMs = Date.now() - startTime;
-    this.log(opts, `\n${"─".repeat(40)}`);
-    this.log(opts, `✓ Completed in ${(elapsedMs / 1000).toFixed(1)}s`);
 
     // Save sandbox state
     await this.manager.save(sandboxName, sb);
@@ -122,8 +122,10 @@ export class RunHandler implements IRunService {
     const newFiles: string[] = [];
     const modifiedFiles: string[] = [];
     let unchangedCount = 0;
+    let toolCalls = 0;
 
     this.walkVFSFlat(sb, sb.cwd, sb.cwd, (relPath, content) => {
+      toolCalls++; // approximate from VFS entries
       if (!filesBefore.has(relPath)) {
         newFiles.push(relPath);
       } else if (contentsBefore.get(relPath) !== content) {
@@ -133,20 +135,8 @@ export class RunHandler implements IRunService {
       }
     });
 
-    // Report changes
-    if (newFiles.length > 0) {
-      this.log(opts, `\n  🆕 New files (${newFiles.length}):`);
-      for (const f of newFiles) this.log(opts, `    A ${f}`);
-    }
-    if (modifiedFiles.length > 0) {
-      this.log(opts, `\n  ✏️  Modified files (${modifiedFiles.length}):`);
-      for (const f of modifiedFiles) this.log(opts, `    M ${f}`);
-    }
-    if (newFiles.length === 0 && modifiedFiles.length === 0) {
-      this.log(opts, `\n  (no changes detected)`);
-    } else {
-      this.log(opts, `\n  📁 Unchanged: ${unchangedCount} files`);
-    }
+    // Emit session_end through the pipeline (TTY + Markdown adapters)
+    await this.teardownStreaming(opts, startTime, newFiles, modifiedFiles, unchangedCount, toolCalls);
 
     // 3. Commit
     let commitSha: string | undefined;
@@ -169,7 +159,7 @@ export class RunHandler implements IRunService {
     }
 
     this.log(opts, `\n  Sandbox: ${sandboxName}`);
-    this.log(opts, `  To continue: piebox "next prompt" -s ${sandboxName}`);
+    this.log(opts, `  To continue: piebox run "next prompt" -s ${sandboxName}`);
 
     return ok({
       sandboxName,
@@ -279,7 +269,7 @@ export class RunHandler implements IRunService {
     this.log(opts, `   Log: ${path.relative(hostDir, logFile)}\n`);
 
     // Subscribe to events for streaming UX
-    this.setupStreaming(session, logFile, opts);
+    await this.setupStreaming(session, logFile, opts);
 
     // Run the prompt
     this.log(opts, "─".repeat(60));
@@ -524,91 +514,60 @@ export class RunHandler implements IRunService {
     }
   }
 
-  private setupStreaming(session: any, logFile: string, opts: RunInput): void {
-    let thinkingBuffer = "";
-    let consecutiveBash = 0;
-    const MAX_BASH_SHOWN = 5;
+  private adapter: StreamAdapter | undefined;
 
-    const log = (msg: string) => {
-      if (!opts.quiet) process.stderr.write(msg + "\n");
-    };
+  private async setupStreaming(session: any, logFile: string, opts: RunInput): Promise<void> {
+    const state = new NormalizerState();
+
+    // Build adapter pipeline
+    const adapters: StreamAdapter[] = [];
+    if (!opts.quiet) {
+      adapters.push(new TTYAdapter(opts.verbose ?? false));
+    }
+    // Write markdown session log next to the JSONL log
+    const mdPath = logFile.replace(/\.jsonl$/, ".md");
+    adapters.push(new MarkdownAdapter(mdPath));
+
+    const adapter: StreamAdapter = adapters.length === 1 ? adapters[0]! : new MultiAdapter(adapters);
+    this.adapter = adapter;
+    await adapter.start?.();
+
+    // Emit session_start
+    adapter.write({
+      type: "session_start",
+      model: opts.model ?? "default",
+      sandbox: opts.sandboxName ?? "anonymous",
+      timestamp: Date.now(),
+    });
 
     session.subscribe((event: any) => {
+      // Raw log (always)
       appendFile(logFile, JSON.stringify(event) + "\n", () => {});
 
-      if (event.type !== "message_update") return;
-      const inner = event.assistantMessageEvent;
-
-      // ── Thinking (verbose only) ───────────────────────────────────
-      if (inner.type === "thinking_delta") {
-        thinkingBuffer += inner.delta ?? "";
-        return;
-      }
-      if (inner.type === "thinking_end") {
-        if (opts.verbose && thinkingBuffer.length > 0) {
-          const clean = thinkingBuffer
-            .replace(/\*\*/g, "")
-            .replace(/\n+/g, " ")
-            .trim()
-            .slice(0, 80);
-          if (clean) log(`  💭 ${clean}`);
-        }
-        thinkingBuffer = "";
-        return;
-      }
-
-      // ── Tool calls ────────────────────────────────────────────────
-      if (inner.type === "toolcall_end") {
-        const tc = inner.toolCall ?? {};
-        const name: string = tc.name ?? "";
-        const args = tc.arguments ?? {};
-
-        // File mutations — always shown
-        if (name === "write") {
-          consecutiveBash = 0;
-          const p = args.path ?? "?";
-          log(`  + ${p}`);
-          return;
-        }
-        if (name === "edit") {
-          consecutiveBash = 0;
-          const p = args.path ?? "?";
-          log(`  ~ ${p}`);
-          return;
-        }
-
-        // Everything else — verbose only
-        if (!opts.verbose) return;
-
-        // Flush bash overflow before non-bash tools
-        if (name !== "bash" && consecutiveBash > MAX_BASH_SHOWN) {
-          log(`  ... (${consecutiveBash - MAX_BASH_SHOWN} more)`);
-          consecutiveBash = 0;
-        }
-
-        if (name === "bash") {
-          const cmd = typeof args.command === "string" ? args.command : "";
-          consecutiveBash++;
-          if (consecutiveBash <= MAX_BASH_SHOWN) {
-            log(`  $ ${cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd}`);
-          }
-          return;
-        }
-
-        consecutiveBash = 0;
-        if (name === "ls") {
-          log(`  📂 ${args.path ?? "."}`);
-        } else if (name === "grep") {
-          log(`  🔍 grep ${args.query ?? args.pattern ?? ""}`);
-        } else if (name === "find") {
-          log(`  🔍 find ${args.pattern ?? ""}`);
-        }
-        // read is intentionally silent
-      }
-
-      if (inner.type === "text_delta" && opts.verbose) {
-        process.stdout.write(inner.delta);
-      }
+      // Normalize → adapt
+      const normalized = normalize(event, state);
+      if (normalized) adapter.write(normalized);
     });
+  }
+
+  private async teardownStreaming(
+    opts: RunInput,
+    startTime: number,
+    newFiles: string[],
+    modifiedFiles: string[],
+    unchangedCount: number,
+    toolCalls: number,
+  ): Promise<void> {
+    if (!this.adapter) return;
+    this.adapter.write({
+      type: "session_end",
+      durationMs: Date.now() - startTime,
+      newFiles,
+      modifiedFiles,
+      unchangedCount,
+      toolCalls,
+    });
+    await this.adapter.end?.();
+    this.adapter = undefined;
   }
 }
