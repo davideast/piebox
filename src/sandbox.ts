@@ -46,7 +46,8 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { create as createVFS, type VirtualFileSystem } from "@platformatic/vfs";
+import { create as createVFS } from "./fs/index.js";
+import type { PieboxFS as VirtualFileSystem } from "./fs/index.js";
 import { Bash, type BashOptions } from "just-bash";
 import type { AllowedUrlEntry } from "just-bash";
 import { createBashFsAdapter } from "./adapters/bash-fs-adapter.js";
@@ -437,7 +438,11 @@ export function sandbox(options?: SandboxOptions): SandboxInstance {
       try {
         vfs.mkdirSync(dir, { recursive: true });
       } catch {}
-      vfs.writeFileSync(file.path, file.content, file.encoding);
+      if (file.encoding === "base64") {
+        vfs.writeFileSync(file.path, Buffer.from(file.content, "base64"));
+      } else {
+        vfs.writeFileSync(file.path, file.content);
+      }
     }
   }
 

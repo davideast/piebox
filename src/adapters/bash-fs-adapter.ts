@@ -1,12 +1,19 @@
 /**
- * Adapter: @platformatic/vfs → just-bash IFileSystem
+ * Adapter: PieboxFS → just-bash IFileSystem
  *
- * Bridges the node:fs-compatible VirtualFileSystem to just-bash's
- * IFileSystem interface so the Bash interpreter operates on the
- * same in-memory filesystem that isomorphic-git and Pi SDK tools use.
+ * Bridges the node:fs-compatible PieboxFS to just-bash's IFileSystem
+ * interface so the Bash interpreter operates on the same in-memory
+ * filesystem that isomorphic-git and Pi SDK tools use.
+ *
+ * Scenario A (browser, almostnode) does not currently use just-bash on
+ * the host side — almostnode bundles its own internal just-bash for the
+ * `node` and `npm` commands. This adapter is therefore a Node-side path
+ * for now. The optional methods on PieboxFS (appendFileSync, symlinkSync,
+ * readlinkSync) are present on the Node backend (@platformatic/vfs) which
+ * is the only place this adapter is wired.
  */
 
-import type { VirtualFileSystem } from "@platformatic/vfs";
+import type { PieboxFS as VirtualFileSystem } from "../fs/index.js";
 import type {
   IFileSystem,
   FsStat,
@@ -28,7 +35,10 @@ export function createBashFsAdapter(vfs: VirtualFileSystem): IFileSystem {
     async readFile(path, options?) {
       const encoding =
         typeof options === "string" ? options : options?.encoding ?? "utf8";
-      return vfs.readFileSync(path, { encoding: encoding ?? "utf8" }) as string;
+      // PieboxFS only declares "utf-8"/"utf8" formally; the Node backend's
+      // underlying @platformatic/vfs accepts any BufferEncoding. The cast is
+      // safe because bash-fs-adapter is wired only on the Node path.
+      return vfs.readFileSync(path, { encoding: (encoding ?? "utf8") as "utf8" }) as string;
     },
 
     async readFileBuffer(path) {
@@ -40,7 +50,7 @@ export function createBashFsAdapter(vfs: VirtualFileSystem): IFileSystem {
         typeof options === "string" ? options : (options as any)?.encoding;
       const data =
         content instanceof Uint8Array ? Buffer.from(content) : content;
-      vfs.writeFileSync(path, data as string | Buffer, encoding ? { encoding } : undefined);
+      vfs.writeFileSync(path, data as string | Buffer, encoding ? ({ encoding } as any) : undefined);
     },
 
     async appendFile(path, content, options?) {
@@ -48,7 +58,10 @@ export function createBashFsAdapter(vfs: VirtualFileSystem): IFileSystem {
         typeof options === "string" ? options : (options as any)?.encoding;
       const data =
         content instanceof Uint8Array ? Buffer.from(content) : content;
-      vfs.appendFileSync(path, data as string | Buffer, encoding ? { encoding } : undefined);
+      if (!vfs.appendFileSync) {
+        throw new Error(`ENOSYS: appendFile not supported on this FS, path '${path}'`);
+      }
+      vfs.appendFileSync(path, data as string | Buffer, encoding ? ({ encoding } as any) : undefined);
     },
 
     async exists(path) {
@@ -146,15 +159,21 @@ export function createBashFsAdapter(vfs: VirtualFileSystem): IFileSystem {
     },
 
     async symlink(target, linkPath) {
+      if (!vfs.symlinkSync) {
+        throw new Error(`ENOSYS: symlink not supported on this FS, path '${linkPath}'`);
+      }
       vfs.symlinkSync(target, linkPath);
     },
 
     async link(_existingPath, _newPath) {
-      // Hard links not supported by @platformatic/vfs, copy instead
+      // Hard links not supported by VFS backends; copy instead.
       vfs.copyFileSync(_existingPath, _newPath);
     },
 
     async readlink(path) {
+      if (!vfs.readlinkSync) {
+        throw new Error(`ENOSYS: readlink not supported on this FS, path '${path}'`);
+      }
       return vfs.readlinkSync(path);
     },
 

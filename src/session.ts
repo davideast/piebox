@@ -16,7 +16,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { create as createVFS } from "@platformatic/vfs";
+import { create as createVFS } from "./fs/index.js";
 import { Bash } from "just-bash";
 import { createBashFsAdapter } from "./adapters/bash-fs-adapter.js";
 import { createSandboxedTools } from "./tools.js";
