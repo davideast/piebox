@@ -1,5 +1,5 @@
 /**
- * Adapter: @platformatic/vfs → isomorphic-git FsClient (promise API)
+ * Adapter: PieboxFS → isomorphic-git FsClient (promise API)
  *
  * isomorphic-git supports two fs interfaces:
  *   1. Callback API (node:fs style)
@@ -7,15 +7,22 @@
  *
  * We use the Promise API (preferred by isomorphic-git) by creating a
  * `promises` object with properly bound async methods that delegate
- * to VFS's synchronous operations.
+ * to the sync PieboxFS surface.
  *
- * The key issue: @platformatic/vfs's native `promises` getter returns
- * an object whose methods don't survive `.bind()`, which causes
- * isomorphic-git's `bindFs()` to crash. We fix this by creating our
- * own `promises` object with regular functions.
+ * Historically this was written against @platformatic/vfs's `.promises`
+ * getter, whose methods don't survive `.bind()` — which causes
+ * isomorphic-git's `bindFs()` to crash. We synthesize our own `promises`
+ * object with plain functions, which works for both the Node backend
+ * (@platformatic/vfs) and the browser backend (almostnode), the latter
+ * of which does not expose a `.promises` API at all.
+ *
+ * The adapter calls `readlinkSync` / `symlinkSync` only if the underlying
+ * FS provides them. The browser backend throws ENOSYS for both, which is
+ * the correct behavior — almostnode's VFS has no symlinks, and a Scenario
+ * A clone never produces one in the workdir.
  */
 
-import type { VirtualFileSystem } from "@platformatic/vfs";
+import type { PieboxFS as VirtualFileSystem } from "../fs/index.js";
 
 /**
  * Create an fs object compatible with isomorphic-git from a VirtualFileSystem.
@@ -58,10 +65,20 @@ export function createGitFsAdapter(vfs: VirtualFileSystem): any {
     },
 
     async readlink(filepath: string): Promise<string> {
+      if (!vfs.readlinkSync) {
+        const err = new Error(`ENOSYS: readlink not supported, path '${filepath}'`) as Error & { code: string };
+        err.code = "ENOSYS";
+        throw err;
+      }
       return vfs.readlinkSync(filepath);
     },
 
     async symlink(target: string, filepath: string): Promise<void> {
+      if (!vfs.symlinkSync) {
+        const err = new Error(`ENOSYS: symlink not supported, path '${filepath}'`) as Error & { code: string };
+        err.code = "ENOSYS";
+        throw err;
+      }
       vfs.symlinkSync(target, filepath);
     },
 
