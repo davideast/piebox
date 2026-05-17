@@ -1,5 +1,5 @@
 import type { PieboxFS as VirtualFileSystem } from "../fs/types.js";
-import type { WriteOperations } from "@earendil-works/pi-coding-agent";
+import type { WriteOperations } from "./types.js";
 
 export function createWriteOperations(vfs: VirtualFileSystem): WriteOperations {
   return {

@@ -87,3 +87,18 @@ export type { BashOptions } from "just-bash";
 export type { PieboxRuntime, PieboxRunOptions, PieboxRunResult } from "./runtime/index.js";
 export { createBrowserRuntime } from "./runtime/index.js";
 export type { AlmostnodeContainerLike } from "./runtime/index.js";
+
+// ─── Piebox-native operation types ───────────────────────────────────────
+// Also available under the `piebox/operations` sub-path for consumers
+// who only need the types and don't want to pull in the full piebox
+// entry. Step 2 of the composable-sandbox migration plan; see
+// docs/investigations/G-migration.md.
+export type {
+  ReadOperations,
+  WriteOperations,
+  EditOperations,
+  LsOperations,
+  GrepOperations,
+  FindOperations,
+  BashOperations,
+} from "./operations/index.js";
