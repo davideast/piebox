@@ -21,6 +21,10 @@
     "./operations": {
       "types": "./dist/operations/index.d.ts",
       "import": "./dist/operations/index.js"
+    },
+    "./layer2": {
+      "types": "./dist/layer2/index.d.ts",
+      "import": "./dist/layer2/index.js"
     }
   },
   "bin": {
