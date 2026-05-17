@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>piebox · browser playground</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; max-width: 980px; margin: 2rem auto; padding: 0 1rem; }
+      h1 { font-size: 1.1rem; margin-bottom: 0.5rem; }
+      .sub { color: #888; margin-top: 0; }
+      .row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; }
+      button { padding: 0.5rem 0.8rem; font: inherit; cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      pre { background: #11111108; padding: 1rem; border-radius: 6px; min-height: 60vh; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+      .status { font-size: 0.85rem; color: #888; }
+    </style>
+  </head>
+  <body>
+    <h1>piebox · browser playground</h1>
+    <p class="sub">almostnode VirtualFS → PieboxFS adapter + PieboxRuntime. Trusted main-thread mode.</p>
+
+    <div class="row">
+      <button id="fs">1 · FS round-trip</button>
+      <button id="git">2 · isomorphic-git in-memory</button>
+      <button id="run">3 · node script</button>
+      <button id="install">4 · npm install zod</button>
+      <button id="use-zod">5 · use installed zod</button>
+      <button id="server">6 · http server + bridge fetch</button>
+      <button id="clear">clear log</button>
+    </div>
+    <p class="status" id="status">initializing…</p>
+    <pre id="log"></pre>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
