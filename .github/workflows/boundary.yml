@@ -1,0 +1,47 @@
+# Piebox boundary check.
+#
+# Runs `bash scripts/boundary-test.sh` on every push and PR to surface
+# whether the Layer 2 boundary is improving (or regressing) across
+# changes. Today the check runs in REPORT-ONLY mode — a non-zero exit
+# does NOT fail the build, because the baseline (see
+# `scripts/boundary-baseline.json`) is currently 21 violations and we
+# need a few migration steps to drain that.
+#
+# The gate flips to failing in Step 6 of the migration plan, once
+# the count is expected to be 0 and any new violation is a real
+# regression. See docs/investigations/G-migration.md.
+name: Boundary check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  boundary:
+    name: piebox/src boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run boundary-test.sh (report-only)
+        id: boundary
+        continue-on-error: true
+        run: bash scripts/boundary-test.sh
+
+      - name: Report violation delta vs baseline
+        if: always()
+        run: |
+          set -euo pipefail
+          baseline=$(jq -r '.total_violations' scripts/boundary-baseline.json)
+          actual=$(bash scripts/boundary-test.sh 2>&1 | grep -oE 'Found [0-9]+ boundary' | grep -oE '[0-9]+' | head -1 || echo 0)
+          echo "Baseline (frozen at scripts/boundary-baseline.json): $baseline"
+          echo "Current branch:                                       $actual"
+          if [ "$actual" -lt "$baseline" ]; then
+            echo "::notice title=Boundary improving::violations dropped from $baseline to $actual"
+          elif [ "$actual" -eq "$baseline" ]; then
+            echo "::notice title=Boundary unchanged::still at $actual violations"
+          else
+            echo "::warning title=Boundary regressing::violations went from $baseline to $actual"
+          fi
