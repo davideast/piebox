@@ -13,13 +13,14 @@
  *   - `./adapters/pi-coding-agent.ts` — bridges to the server-side
  *     `@earendil-works/pi-coding-agent` SDK.
  *
- * This file is intentionally minimal at scaffold time. Step 4 fills
- * in `createAgentDriver`, `AgentEvent`, and the browser adapter.
- * Step 5 fills in the server-side adapter plus the session/skills
- * scaffolding moved out of `piebox` core.
- *
- * See `docs/investigations/G-migration.md` Steps 4 + 5.
+ * Exports land here in two phases (Steps 4 and 5 of the
+ * composable-sandbox migration). The section markers below keep
+ * parallel work cleanly disjoint — each step fills only its own
+ * section so a rebase between them is purely additive.
  */
 
-// Re-exports land here as each step delivers its slice.
+// ─── Step 4 — browser path (createAgentDriver, AgentEvent, inbrowser-agent adapter) ───
+
+// ─── Step 5 — server path (session/skills surface, pi-coding-agent adapter) ───
+
 export {};
