@@ -70,10 +70,26 @@ function PlaygroundShell() {
   );
   const { send, stop } = useAgentLoop();
   const sending = useSessionStore((s) => s.sending);
+  const phase = useSessionStore((s) => s.phase);
   const error = useSessionStore((s) => s.error);
   const turns = useSessionStore((s) => s.turns);
   const tokensTotal = useSessionStore((s) => s.tokensTotal);
   const { toast } = useToast();
+
+  const handleNewChat = useCallback(() => {
+    // Best-effort stop in case the user clicks while a turn is still
+    // racing (the button is also disabled during sending, but tabs +
+    // keyboard shortcuts can still get here). Then clear the surfaces
+    // that make this feel like a fresh chat — chat history, terminal
+    // stream, session counters, and surfaced error. The /work VFS is
+    // left intact on purpose: blowing away the user's project files
+    // every time they hit "new chat" would be surprising.
+    stop();
+    useChatStore.getState().reset();
+    useTerminalStore.getState().clear();
+    useSessionStore.getState().reset();
+    setComposeValue('');
+  }, [stop]);
 
   const handleCopySession = useCallback(async () => {
     const messages = useChatStore.getState().messages;
@@ -180,6 +196,8 @@ function PlaygroundShell() {
         sessionState={sessionState}
         onOpenKeys={() => setKeysOpen(true)}
         onCopySession={handleCopySession}
+        onNewChat={handleNewChat}
+        newChatDisabled={sending}
       >
         {/* Desktop carries the picker in the TopBar; mobile hides it
             here (the bar is tight) and re-renders it inside the API
@@ -246,6 +264,7 @@ function PlaygroundShell() {
             onSubmit={handleSubmit}
             onStop={stop}
             sending={sending}
+            phase={phase}
             disabled={!hasKey}
             placeholder={
               hasKey

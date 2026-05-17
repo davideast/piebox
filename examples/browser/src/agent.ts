@@ -20,6 +20,7 @@ import {
   EMPTY_RUNTIME,
   type AgentSession,
   type ChatEvent,
+  type ChatMessage as SdkChatMessage,
   type LlmClient,
   type LlmConfig,
   type ToolHandler,
@@ -894,6 +895,11 @@ export interface BuildAgentOptions {
   cwd: string;
   apiKey: string;
   modelId?: string;
+  /** Prior turns to thread into the LLM context. Tool calls + results
+   *  must be embedded on assistant messages so the model sees what it
+   *  did in earlier turns (the SDK session only persists assistant
+   *  *text* across submits, so we rebuild the session each turn). */
+  history?: SdkChatMessage[];
   /** Optional trace sink. Zero cost when absent. */
   tracer?: Tracer;
 }
@@ -924,7 +930,7 @@ export function buildAgent(options: BuildAgentOptions): AgentHandle {
       signal: new AbortController().signal,
     }),
     metrics: createMetricsCollector(),
-    history: [],
+    history: options.history ?? [],
     systemPromptBuilder: () => SYSTEM_PROMPT,
     tracer: options.tracer,
   });
