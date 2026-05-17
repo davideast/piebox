@@ -48,3 +48,18 @@ export type {
   PieboxRunOptions,
   PieboxRunResult,
 } from "./runtime/types.js";
+
+// ─── Streaming pipeline (pure, browser-safe) ─────────────────────────────
+export type { StreamEvent, FileEntry, StreamAdapter } from "./streaming.js";
+export { NormalizerState, normalize, MultiAdapter } from "./streaming.js";
+
+// ─── Operation factories (browser-safe; depend only on PieboxFS types) ──
+// These mirror what createSandboxedTools wires on Node, but as individual
+// factories so a browser consumer can compose only what it needs without
+// dragging in just-bash.
+export { createReadOperations } from "./operations/read.js";
+export { createWriteOperations } from "./operations/write.js";
+export { createEditOperations } from "./operations/edit.js";
+export { createGrepOperations } from "./operations/grep.js";
+export { createFindOperations } from "./operations/find.js";
+export { createLsOperations } from "./operations/ls.js";

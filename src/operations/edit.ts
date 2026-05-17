@@ -1,4 +1,4 @@
-import type { PieboxFS as VirtualFileSystem } from "../fs/index.js";
+import type { PieboxFS as VirtualFileSystem } from "../fs/types.js";
 import type { EditOperations } from "@earendil-works/pi-coding-agent";
 
 export function createEditOperations(vfs: VirtualFileSystem): EditOperations {

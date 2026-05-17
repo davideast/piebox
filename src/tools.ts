@@ -5,7 +5,7 @@
  * IFileSystem adapter over the VFS. Pi SDK tools use the VFS directly.
  */
 
-import type { PieboxFS as VirtualFileSystem } from "./fs/index.js";
+import type { PieboxFS as VirtualFileSystem } from "./fs/types.js";
 import type { Bash } from "just-bash";
 import {
   createBashToolDefinition,
