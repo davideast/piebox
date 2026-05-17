@@ -28,9 +28,16 @@ export const viteReactTsTemplate: Record<string, string> = {
         preview: "vite preview",
       },
       // EVERYTHING in dependencies — see header comment.
+      // react-refresh is listed explicitly: @vitejs/plugin-react peer-depends
+      // on it for Fast Refresh, and almostnode's npm install doesn't pull
+      // optional/peer deps. Without it the plugin throws
+      // "Failed to resolve module specifier 'react-refresh/babel'" the first
+      // time it tries to transform /src/main.tsx and the React app never
+      // mounts.
       dependencies: {
         react: "^18.3.1",
         "react-dom": "^18.3.1",
+        "react-refresh": "^0.14.2",
         vite: "^5.4.8",
         "@vitejs/plugin-react": "^4.3.2",
         typescript: "^5.6.2",
@@ -62,6 +69,16 @@ import react from "@vitejs/plugin-react";
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  server: {
+    // The piebox playground reaches the dev server through almostnode's
+    // Service Worker bridge (http://<host>/__virtual__/<port>/). The
+    // bridge forwards requests without a normal Host header, so Vite's
+    // 5.4+ allowedHosts check 403s by default. Allow all hosts — the
+    // bridge is the only thing on the wire.
+    allowedHosts: true,
+    // Don't pass --host on the CLI; binding to localhost is fine here
+    // because the bridge handles cross-origin exposure for us.
+  },
 });
 `,
 

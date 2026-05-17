@@ -1,11 +1,11 @@
 /**
  * In-browser agent session, built on:
- *   • @pyric/agents          — the agent loop (browser-safe by design)
- *   • @pyric/llm-relay       — Gemini SSE provider (called directly, no relay)
+ *   • @inbrowser/agent       — the agent loop (browser-safe by design)
+ *   • @inbrowser/relay       — Gemini SSE provider (called directly, no relay server)
  *   • piebox/browser         — PieboxFS + PieboxRuntime
  *
- * The LlmClient adapts @pyric/llm-relay's `buildGeminiRequest` +
- * `geminiEventsFromResponse` into @pyric/agents' ChatEvent stream. Tool
+ * The LlmClient adapts @inbrowser/relay's `buildGeminiRequest` +
+ * `geminiEventsFromResponse` into @inbrowser/agent's ChatEvent stream. Tool
  * handlers wire to PieboxFS / PieboxRuntime so `write`, `read`, `bash`,
  * etc. operate on the almostnode-backed virtual filesystem.
  */
@@ -27,11 +27,11 @@ import {
   type ToolResult,
   type JsonSchema,
   type Tracer,
-} from "@pyric/agents";
+} from "@inbrowser/agent";
 import {
   buildGeminiRequest,
   geminiEventsFromResponse,
-} from "@pyric/llm-relay/providers/gemini";
+} from "@inbrowser/relay/providers/gemini";
 import type { PieboxFS, PieboxRuntime } from "piebox/browser";
 import { BUNDLED_TEMPLATES } from "./templates/vite-react-ts.js";
 import {
@@ -58,14 +58,14 @@ export function clearApiKey(): void {
   try { localStorage.removeItem(KEY_STORAGE); } catch { /* no-op */ }
 }
 
-// ── Gemini LlmClient via @pyric/llm-relay ─────────────────────────────────
+// ── Gemini LlmClient via @inbrowser/relay ─────────────────────────────────
 
 function createGeminiClient(cfg: LlmConfig): LlmClient {
   return {
     id: `gemini:${cfg.model}`,
     supportsTools: true,
     async *chat(req, signal) {
-      // Translate @pyric/agents' NormalizedMessage → llm-relay's
+      // Translate @inbrowser/agent's NormalizedMessage → relay's
       // LegacyChatMessage. Same role + text shape, plus optional toolCalls
       // on assistant messages and toolCallId on tool messages.
       const messages = req.messages.map((m) => ({
@@ -832,6 +832,12 @@ const SYSTEM_PROMPT = [
   "  console.log('ok');",
   "Then run `node verify.ts`. Exit code 0 + 'ok' on stdout = passed. AssertionError = failed.",
   "If you need a real test framework, `npm install vitest` works; then `npx`-style invocations fail (no npx), so call the binary directly: `node node_modules/vitest/vitest.mjs run`.",
+  "",
+  "## Dev-server invocation: do NOT pass --host",
+  "When starting a framework dev server (e.g. `node ./node_modules/vite/bin/vite.js`), DO NOT pass `--host` or `--host 0.0.0.0`. Vite 5.4+ enables an `allowedHosts` check when binding to all interfaces, and the playground's Service Worker bridge forwards requests with no Host header — Vite then 403s the bridged request.",
+  "Bind to localhost (the default — pass NO --host flag). The bridge handles cross-origin exposure for the preview iframe.",
+  "If you must pass a port, use `--port <N>` alone, e.g. `node ./node_modules/vite/bin/vite.js --port 3000`.",
+  "If you're authoring `vite.config.ts`, include `server: { allowedHosts: true }` as belt-and-suspenders.",
   "",
   "## When `npm run <script>` fails with 'command not found'",
   "package.json scripts often chain binaries that are not on PATH in this sandbox. The common offender is `\"build\": \"tsc && vite build\"` — `tsc` isn't shipped, and you don't need it because `node` handles TypeScript natively.",

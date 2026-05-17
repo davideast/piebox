@@ -1,0 +1,154 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    background: theme('colors.content-bg');
+    color: theme('colors.soft-white');
+    font-family: theme('fontFamily.display');
+    overscroll-behavior-y: auto;
+  }
+  #root {
+    height: 100vh;
+    height: 100dvh;
+    width: 100vw;
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    inset: 0;
+  }
+}
+
+@layer utilities {
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #33333f;
+    border-radius: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #444455;
+  }
+}
+
+/* ----------------------------------------------------------------
+   @pyric/ui styling — the vendored components ship zero CSS and emit
+   [data-pyric-*] attributes. The selectors below attach the playground's
+   visual design to them. Mirrors firebase-agent-sdk/examples/playground-
+   next/src/styles/global.css, scoped to just the pieces we use here.
+   ---------------------------------------------------------------- */
+@layer components {
+  /* Fold (agents) */
+  [data-pyric-ui='fold'] {
+    @apply rounded border border-[#2a2a35] bg-[#1a1a22] overflow-hidden;
+  }
+  [data-pyric-ui='fold'] > [data-pyric-fold-summary] {
+    @apply list-none cursor-pointer select-none px-3 py-2 text-[12px] text-slate-gray flex items-center gap-2 hover:text-soft-white transition-colors;
+  }
+  [data-pyric-ui='fold'] > [data-pyric-fold-summary]::-webkit-details-marker {
+    display: none;
+  }
+  [data-pyric-fold-chevron]::before {
+    content: '›';
+    @apply text-[14px] inline-block transition-transform;
+  }
+  [data-pyric-ui='fold'][open] [data-pyric-fold-chevron]::before {
+    transform: rotate(90deg);
+  }
+  [data-pyric-fold-header] {
+    @apply flex-1 min-w-0 truncate;
+  }
+  [data-pyric-fold-action] {
+    @apply shrink-0;
+  }
+  [data-pyric-fold-body] {
+    @apply px-3 pb-3 pt-1 border-t border-[#2a2a35] text-[12px] text-soft-white;
+  }
+  [data-pyric-fold-tone='error'] {
+    @apply border-[#3a2a2a];
+  }
+  [data-pyric-fold-tone='error'] [data-pyric-fold-body] {
+    @apply text-[#f0a0a0];
+  }
+  [data-pyric-fold-tone='thought'] [data-pyric-fold-body] {
+    @apply text-slate-gray italic;
+  }
+
+  /* EmptyState (agents) */
+  [data-pyric-ui='empty-state'] {
+    @apply flex-1 flex flex-col items-center justify-center text-center px-6 py-10 gap-2;
+  }
+  [data-pyric-ui='empty-state'] [data-pyric-empty-icon] {
+    @apply text-slate-gray text-[28px] mb-1;
+  }
+  [data-pyric-ui='empty-state'] [data-pyric-empty-title] {
+    @apply text-soft-white text-[14px] font-medium m-0;
+  }
+  [data-pyric-ui='empty-state'] [data-pyric-empty-body] {
+    @apply text-slate-gray text-[12px] max-w-[36ch] m-0;
+  }
+
+  /* PulsingDot (agents) */
+  [data-pyric-ui='pulsing-dot'] {
+    @apply relative inline-flex items-center justify-center w-2 h-2;
+  }
+  [data-pyric-ui='pulsing-dot'] [data-pyric-pulse-ring] {
+    @apply absolute inset-0 rounded-full bg-[#a4d4a8]/40;
+    animation: pyric-pulse 1.6s ease-out infinite;
+  }
+  [data-pyric-ui='pulsing-dot'] [data-pyric-pulse-core] {
+    @apply relative w-1.5 h-1.5 rounded-full bg-[#a4d4a8];
+  }
+  @keyframes pyric-pulse {
+    0% { transform: scale(0.6); opacity: 0.9; }
+    100% { transform: scale(1.6); opacity: 0; }
+  }
+
+  /* Modal (agents) */
+  [data-pyric-ui='modal'] {
+    @apply fixed inset-0 z-[1000] flex items-center justify-center p-4;
+  }
+  [data-pyric-modal-backdrop] {
+    @apply absolute inset-0 bg-black/60 backdrop-blur-sm;
+  }
+  [data-pyric-modal-panel] {
+    @apply relative w-full max-w-md bg-sidebar-bg border border-[#2a2a35] rounded-lg shadow-xl p-5;
+  }
+
+  /* Toast (primitives) */
+  [data-pyric-ui='toast-region'] {
+    @apply fixed bottom-4 right-4 z-[2000] flex flex-col gap-2 list-none p-0 m-0 max-w-sm;
+  }
+  [data-pyric-toast] {
+    @apply relative bg-sidebar-bg border border-[#2a2a35] rounded-md px-4 py-3 pr-9 text-[12px] text-soft-white shadow-lg;
+  }
+  [data-pyric-toast-kind='success'] {
+    @apply border-[#2a4a32];
+  }
+  [data-pyric-toast-kind='error'] {
+    @apply border-[#4a2a2a];
+  }
+  [data-pyric-toast-kind='warning'] {
+    @apply border-[#4a3a2a];
+  }
+  [data-pyric-toast-title] {
+    @apply font-medium;
+  }
+  [data-pyric-toast-body] {
+    @apply text-slate-gray text-[11px] mt-0.5;
+  }
+  [data-pyric-toast-dismiss] {
+    @apply absolute top-1.5 right-2 text-slate-gray hover:text-soft-white bg-transparent border-0 cursor-pointer text-[14px];
+  }
+}

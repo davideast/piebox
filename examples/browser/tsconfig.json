@@ -10,11 +10,12 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    "jsx": "react-jsx",
     "paths": {
       "piebox/browser": ["../../src/browser.ts"],
-      "@pyric/agents": ["/Users/davideast/Code/firebase-agent-sdk/packages/agent/dist/index.d.ts"],
-      "@pyric/llm-relay/providers/gemini": ["/Users/davideast/Code/firebase-agent-sdk/packages/llm-relay/dist/providers/gemini.d.ts"]
+      "@pyric/ui/agents": ["./vendor/pyric-ui/agents/index.ts"],
+      "@pyric/ui/primitives": ["./vendor/pyric-ui/primitives/index.ts"]
     }
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "vendor", "vite.config.ts"]
 }
