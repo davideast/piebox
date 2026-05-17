@@ -26,6 +26,7 @@ import type { Terminal } from "@xterm/xterm";
 import type { PieboxFS, PieboxRuntime } from "piebox/browser";
 import { runInSandbox } from "./translators.js";
 import { tokenize } from "./git-shim.js";
+import { bumpVfsRevision } from "../store/vfs-revision.js";
 
 const HOME = "/work";
 
@@ -190,6 +191,10 @@ export class ShellSession {
     } finally {
       this.busy = false;
       this.abortController = null;
+      // The command may have mutated /work (mkdir, write, npm install,
+      // git init, etc.). Signal subscribers (EditorPane's file tree)
+      // to re-walk. Cheap: an in-memory counter bump.
+      bumpVfsRevision();
       this.writePrompt();
     }
   }

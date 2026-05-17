@@ -41,12 +41,14 @@ try {
   // Test seam from main.tsx — used to wait for almostnode boot.
   await page.waitForFunction(() => !!window.__piebox_test, null, { timeout: 5_000 });
 
-  // 1. Switch to the Shell tab.
+  // 1. Switch to the interactive Terminal tab (xterm.js). The
+  // read-only log stream lives under the "Logs" tab now — see
+  // PlaygroundPage.tsx rightTabs.
   await page.evaluate(() => {
     const btn = Array.from(document.querySelectorAll("button")).find(
-      (b) => b.textContent?.trim() === "Shell",
+      (b) => b.textContent?.trim() === "Terminal",
     );
-    if (!btn) throw new Error("Shell tab button missing");
+    if (!btn) throw new Error("Terminal tab button missing");
     btn.click();
   });
   // xterm.js needs a frame to mount.
@@ -60,18 +62,15 @@ try {
   await new Promise((r) => setTimeout(r, 1500));
   check("Shell tab mounted and almostnode booted", true);
 
-  // Helper: type a command into xterm and press enter. xterm.js
-  // listens to the DOM via the textarea inside its viewport; sending
-  // keystrokes via page.keyboard is the simplest path.
+  // Helper: type a command into xterm and press enter. Simulates a
+  // real-user interaction — click on the terminal area, then type.
+  // No explicit textarea focus: if the wrapper's onMouseDown handler
+  // and term.focus() on mount don't do their job, this probe catches
+  // the regression.
   async function type(text) {
-    // Make sure xterm's input element has focus.
-    const focused = await page.evaluate(() => {
-      const host = document.querySelector('[data-testid="shell-host"]');
-      const ta = host?.querySelector("textarea");
-      ta?.focus();
-      return document.activeElement?.tagName;
-    });
-    if (focused !== "TEXTAREA") throw new Error("could not focus xterm textarea");
+    await page.click('[data-testid="shell-host"]');
+    const focused = await page.evaluate(() => document.activeElement?.tagName);
+    if (focused !== "TEXTAREA") throw new Error(`expected TEXTAREA focused, got ${focused}`);
     await page.keyboard.type(text);
   }
   async function enter() {
@@ -161,6 +160,29 @@ try {
     return Array.from(rows.children).filter((r) => (r.textContent ?? "").trim().length > 0).length;
   });
   check("Ctrl+L clears most of the screen", clearedRows <= 1, `non-empty rows=${clearedRows}`);
+
+  // 7. Shell-driven FS mutations bump the VFS revision counter so
+  //    EditorPane's file tree re-walks without a manual refresh click.
+  //    Prior steps left a recalled "pwd" in the buffer (from the up-
+  //    arrow test); Ctrl+C clears it before we type the next command.
+  await page.keyboard.press("Control+C");
+  await new Promise((r) => setTimeout(r, 100));
+
+  const startTick = await page.evaluate(() => window.__piebox_test.stores.vfs?.getState().revision ?? null);
+  if (startTick !== null) {
+    await type("mkdir notebook");
+    await enter();
+    await new Promise((r) => setTimeout(r, 800));
+    const endTick = await page.evaluate(() => window.__piebox_test.stores.vfs.getState().revision);
+    check("VFS revision bumped after `mkdir notebook`", endTick > startTick, `start=${startTick} end=${endTick}`);
+
+    const dirExists = await page.evaluate(() =>
+      window.__piebox.fs.existsSync("/work/notebook"),
+    );
+    check("/work/notebook actually created by shell", dirExists === true);
+  } else {
+    check("VFS revision store exposed via test seam", false, "stores.vfs is undefined");
+  }
 
   console.log("");
   if (failures.length === 0) {
