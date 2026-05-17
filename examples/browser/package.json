@@ -8,7 +8,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "almostnode": "^0.2.14"
+    "almostnode": "^0.2.14",
+    "buffer": "^6.0.3"
   },
   "devDependencies": {
     "typescript": "^5.8.3",

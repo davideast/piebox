@@ -11,7 +11,9 @@
     "isolatedModules": true,
     "noEmit": true,
     "paths": {
-      "piebox/browser": ["../../src/browser.ts"]
+      "piebox/browser": ["../../src/browser.ts"],
+      "@pyric/agents": ["/Users/davideast/Code/firebase-agent-sdk/packages/agent/dist/index.d.ts"],
+      "@pyric/llm-relay/providers/gemini": ["/Users/davideast/Code/firebase-agent-sdk/packages/llm-relay/dist/providers/gemini.d.ts"]
     }
   },
   "include": ["src", "vite.config.ts"]
