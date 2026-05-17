@@ -1,0 +1,15 @@
+import { chromium } from "playwright";
+const b = await chromium.launch({ headless: true });
+const p = await b.newContext().then(c => c.newPage());
+const errs = [];
+p.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") errs.push(`[${m.type()}] ${m.text().slice(0, 400)}`); });
+p.on("pageerror", (e) => errs.push("[pageerror] " + e.message));
+const resp = await p.goto("http://localhost:5173/", { waitUntil: "networkidle", timeout: 15_000 });
+console.log("status:", resp?.status());
+await new Promise(r => setTimeout(r, 2000));
+const html = await p.content();
+console.log("rendered chars:", html.length);
+console.log("has #root content:", /<div id="root"[^>]*>[\s\S]*<\/div>/.test(html) && !/<div id="root"[^>]*><\/div>/.test(html));
+console.log("---errors/warnings:", errs.length);
+for (const e of errs) console.log("  ", e);
+await b.close();

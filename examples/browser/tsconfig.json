@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "piebox/browser": ["../../src/browser.ts"],
+      "@pyric/ui/agents": ["./vendor/pyric-ui/agents/index.ts"],
+      "@pyric/ui/primitives": ["./vendor/pyric-ui/primitives/index.ts"]
+    }
+  },
+  "include": ["src", "vendor", "vite.config.ts"]
+}

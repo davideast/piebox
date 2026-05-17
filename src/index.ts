@@ -68,7 +68,22 @@ export { createGitFsAdapter } from "./adapters/git-fs-adapter.js";
 // ─── Re-exports ─────────────────────────────────────────────────────────────
 // Consumers get the key primitives without adding direct dependencies.
 
-export { create as createVFS } from "@platformatic/vfs";
-export type { VirtualFileSystem, VFSOptions } from "@platformatic/vfs";
+export {
+  create as createVFS,
+  createNodeFs,
+  createBrowserFs,
+} from "./fs/index.js";
+export type {
+  PieboxFS,
+  VirtualFileSystem,
+  AlmostnodeVirtualFsLike,
+  CreateVFSOptions,
+} from "./fs/index.js";
+export type { VFSOptions } from "@platformatic/vfs";
 export { Bash } from "just-bash";
 export type { BashOptions } from "just-bash";
+
+// ─── Runtime hook (browser-only for now) ─────────────────────────────────
+export type { PieboxRuntime, PieboxRunOptions, PieboxRunResult } from "./runtime/index.js";
+export { createBrowserRuntime } from "./runtime/index.js";
+export type { AlmostnodeContainerLike } from "./runtime/index.js";

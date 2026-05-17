@@ -17,7 +17,7 @@ import type {
   ToolDefinition,
   AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import type { VirtualFileSystem } from "@platformatic/vfs";
+import type { PieboxFS as VirtualFileSystem } from "./fs/index.js";
 import type { Bash, BashOptions } from "just-bash";
 
 /** Options for creating a sandboxed agent session. */

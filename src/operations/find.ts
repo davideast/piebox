@@ -1,4 +1,4 @@
-import type { VirtualFileSystem } from "@platformatic/vfs";
+import type { PieboxFS as VirtualFileSystem } from "../fs/types.js";
 import type { FindOperations } from "@earendil-works/pi-coding-agent";
 
 /**

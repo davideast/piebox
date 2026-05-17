@@ -7,7 +7,8 @@
 
 import git from "isomorphic-git";
 import http from "isomorphic-git/http/node";
-import { create as createVFS, type VirtualFileSystem } from "@platformatic/vfs";
+import { create as createVFS } from "./fs/index.js";
+import type { PieboxFS as VirtualFileSystem } from "./fs/index.js";
 import type { ProgressCallback, AuthCallback, ReadCommitResult } from "isomorphic-git";
 import { createGitFsAdapter } from "./adapters/git-fs-adapter.js";
 
