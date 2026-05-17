@@ -30,6 +30,7 @@ import { BottomTabBar } from './BottomTabBar.js';
 import { ComposeBar } from './ComposeBar.js';
 import { ModelPicker } from './ModelPicker.js';
 import { PanelTabs, type Tab } from './PanelTabs.js';
+import { ShellTab } from './ShellTab.js';
 import { StatusBar } from './StatusBar.js';
 import { TerminalTab } from './TerminalTab.js';
 import { TopBar } from './TopBar.js';
@@ -170,6 +171,8 @@ function PlaygroundShell() {
       // Was "Output" in playground-next. Renamed to Terminal here and
       // reimplemented as a read-only stream — see TerminalTab.tsx.
       { id: 'terminal', label: 'Terminal' },
+      // Interactive xterm.js shell — same /work VFS the agent uses.
+      { id: 'shell', label: 'Shell' },
     ],
     [],
   );
@@ -249,6 +252,7 @@ function PlaygroundShell() {
           <div className="flex-1 overflow-hidden flex flex-col min-h-0">
             {activeTab === 'activity' ? <ActivityTab /> : null}
             {activeTab === 'terminal' ? <TerminalTab /> : null}
+            {activeTab === 'shell' ? <ShellTab /> : null}
           </div>
 
           <StatusBar
