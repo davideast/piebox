@@ -4,7 +4,7 @@
  */
 
 import type { Bash, ExecOptions as JustBashExecOptions } from "just-bash";
-import type { BashOperations } from "@earendil-works/pi-coding-agent";
+import type { BashOperations } from "./types.js";
 
 export function createBashOperations(bash: Bash): BashOperations {
   return {

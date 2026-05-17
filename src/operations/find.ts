@@ -1,5 +1,5 @@
 import type { PieboxFS as VirtualFileSystem } from "../fs/types.js";
-import type { FindOperations } from "@earendil-works/pi-coding-agent";
+import type { FindOperations } from "./types.js";
 
 /**
  * Recursively collect all file paths from the VFS under a given root.

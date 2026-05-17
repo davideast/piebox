@@ -1,5 +1,5 @@
 import type { PieboxFS as VirtualFileSystem } from "../fs/types.js";
-import type { GrepOperations } from "@earendil-works/pi-coding-agent";
+import type { GrepOperations } from "./types.js";
 
 export function createGrepOperations(vfs: VirtualFileSystem): GrepOperations {
   return {

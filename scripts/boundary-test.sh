@@ -91,8 +91,21 @@ check_path_against_package() {
   # `import "@x/y"` (side-effect imports — rare for agent SDKs but
   # the pattern accepts no-questions-asked package usage). Both
   # single and double quotes.
+  #
+  # Test files (`*.test.ts`) are excluded: a structural-compatibility
+  # test that needs to import a banned type for assignability
+  # assertions is a legitimate use. Production source has no such
+  # need.
   local matches
-  matches=$(grep -rnE "(from|import)[[:space:]]+['\"]${pkg}(['\"]|/)" "$path" 2>/dev/null || true)
+  matches=$(grep -rnE "(from|import)[[:space:]]+['\"]${pkg}(['\"]|/)" \
+    --include='*.ts' \
+    --include='*.tsx' \
+    --include='*.mts' \
+    --include='*.cts' \
+    --exclude='*.test.ts' \
+    --exclude='*.test.tsx' \
+    --exclude='*.spec.ts' \
+    "$path" 2>/dev/null || true)
   if [[ -n "$matches" ]]; then
     local count
     count=$(echo "$matches" | wc -l | tr -d ' ')
