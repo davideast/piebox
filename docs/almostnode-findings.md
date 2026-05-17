@@ -309,5 +309,37 @@ the agent tools that consume `run` are a later wiring task.
 
 ---
 
+## 11. Empirical findings from the browser playground (post-substrate)
+
+Updates collected while driving the playground through real agent workflows
+(Vite/React scaffolding, fib + node:test, etc.). Each gap is tracked as a
+piebox issue with the upstream almostnode issue referenced.
+
+| Gap | Triggered by | Behaviour | Workaround | Issues |
+|---|---|---|---|---|
+| `node --test <file>` not supported | "write fib.ts + node:test test, then run them" | almostnode's `node` shim treats `--test` as the script path → `Cannot find module '/work/--test'` | Prompt the agent to write a verify-script using `node:assert` directly (`node verify.ts`). | piebox#3, [macaly/almostnode#18](https://github.com/macaly/almostnode/issues/18) |
+| `node -e "<code>"` not supported | Agent debug pattern, `node -e "console.log(...)"` | Same root cause as `--test` — flags eaten as script paths | **Translated by piebox**: `examples/browser/src/agent.ts` writes a tempfile, runs it, deletes it. `[piebox]` notice in output explains the swap. | piebox#3 |
+| `node:util.styleText` missing | `npm create vite@latest` (and any Node 21+ tool that uses it) | `TypeError: (0 , import_node_util.styleText) is not a function` at module load — package fails to even import | Polyfill needed in piebox's boot path. Not yet shipped. | piebox#1, [macaly/almostnode#16](https://github.com/macaly/almostnode/issues/16) |
+| `npm install` (no args) silently skips `devDependencies` | Any scaffolded project with framework in devDeps | Runtime deps install; build tools don't. `node ./node_modules/<framework>/bin/...` fails with `Cannot find module`. Agent loops trying to diagnose. | **Prompt rule shipped**: agent is told to put ALL deps (including build tools, types) into `dependencies`. Treats `devDependencies` as if it doesn't exist for sandbox projects. Wrapper-based backstop is piebox#2. | piebox#2, [macaly/almostnode#17](https://github.com/macaly/almostnode/issues/17) |
+| `npm create` / `npm init <pkg>` not implemented | Any canonical scaffolding pattern (`npm create vite`, `npm create next-app`, etc.) | `npm ERR! Unknown command: "create"` | **Translated by piebox**: bash tool intercepts the canonical syntax and runs `npm install create-<name>` + `node ./node_modules/create-<name>/<bin>`. Same algorithm as real npm minus TTY/env-vars/cache. | piebox (no issue — implemented in agent.ts) |
+| `npm uninstall`, `npm version`, `npm outdated`, `npm audit` unimplemented | (expected; per the original brief) | `npm ERR! Unknown command` | Prompt tells agent to edit `package.json` directly and re-run `npm install`. | — |
+
+### What this implies about Scenario A's headline prompts today
+
+| Headline prompt | Status today | Blocker(s) |
+|---|---|---|
+| Cat 1: write fib + node:test + run | **Works** with verify-script workaround | none |
+| Cat 2: install zod, use it | **Works end-to-end** | none |
+| Cat 3: Hono GET / server | **Works** (plain `node:http` server bridges via SW) | none |
+| Cat 4: `npm run` chains like `tsc && vite build` | Partially — needs decomposition (skip `tsc`, run `vite` directly via bin path) | prompt-only fix; works once agent knows the pattern |
+| Cat 5: Vite + React full scaffold + dev server | **Blocked** | piebox#1 (`styleText`) AND piebox#2 (`devDeps`) compound. The styleText fix alone isn't enough; without devDeps, `vite` never installs even when scaffolding works. |
+| Cat 6: clone repo, edit, diff | **Works** (isomorphic-git in-browser, proven) | none |
+| Cat 7: shell-idiom prompts (`grep -r`, `sed`) | Degrades gracefully — agent uses read+scan instead | none |
+| Cat 8: BOUNDARY (native addons, raw TCP) | Fails cleanly with `Unknown command` / install errors | as expected per brief |
+
+The blocking gap for the Vite headline prompt is **the combination of styleText + devDeps**. Either alone is paperable; together they create a multi-turn loop the agent can't reason out of.
+
+---
+
 **Bottom line for the next step:** no blockers. Proceed with steps 2–5. The FS interface
 shape in §8 and the runtime hook shape in §9 are the concrete contracts to land.
