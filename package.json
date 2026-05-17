@@ -43,6 +43,9 @@
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "keywords": [
     "sandbox",
     "agent",
