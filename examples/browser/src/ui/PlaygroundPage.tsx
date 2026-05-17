@@ -168,11 +168,15 @@ function PlaygroundShell() {
   const rightTabs: readonly Tab[] = useMemo(
     () => [
       { id: 'activity', label: 'Activity' },
-      // Was "Output" in playground-next. Renamed to Terminal here and
-      // reimplemented as a read-only stream — see TerminalTab.tsx.
-      { id: 'terminal', label: 'Terminal' },
-      // Interactive xterm.js shell — same /work VFS the agent uses.
-      { id: 'shell', label: 'Shell' },
+      // The interactive xterm.js terminal. Sits where users expect
+      // "Terminal" to be — typeable, with a prompt and history. Shares
+      // /work with the agent.
+      { id: 'shell', label: 'Terminal' },
+      // Read-only stream of boot, agent tool stdout/stderr, and any
+      // console-level events from the almostnode container. Was the
+      // old "Terminal" tab; renamed to "Logs" so the interactive tab
+      // can take the more obvious name.
+      { id: 'terminal', label: 'Logs' },
     ],
     [],
   );
