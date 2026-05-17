@@ -7,6 +7,7 @@ import { toSdkHistory } from './agent/useAgentLoop.js';
 import { useChatStore } from './store/chat.js';
 import { useSessionStore } from './store/session.js';
 import { useTerminalStore } from './store/terminal.js';
+import { useVfsRevisionStore } from './store/vfs-revision.js';
 import './styles/global.css';
 
 const root = document.getElementById('root');
@@ -21,6 +22,7 @@ if (!root) throw new Error('#root mount missing from index.html');
     chat: useChatStore,
     session: useSessionStore,
     terminal: useTerminalStore,
+    vfs: useVfsRevisionStore,
   },
   toSdkHistory,
 };

@@ -45,7 +45,7 @@ export function TerminalTab() {
     <div className="flex-1 min-h-0 flex flex-col bg-black">
       <div className="flex items-center justify-between gap-3 px-3 py-1.5 border-b border-[#1a1a22] bg-[#0a0a0e] shrink-0">
         <span className="text-[10px] font-mono uppercase tracking-wider text-slate-gray/80">
-          terminal · read-only
+          logs · read-only
         </span>
         <div className="flex items-center gap-3">
           <span className="text-[10px] font-mono text-slate-gray/70">

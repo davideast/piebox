@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EmptyState } from '@pyric/ui/agents';
 import { getRuntime } from '../store/runtime.js';
 import { useChatStore } from '../store/chat.js';
+import { useVfsRevisionStore } from '../store/vfs-revision.js';
 
 const ROOT = '/work';
 const IGNORE_DEFAULT = new Set(['node_modules', '.git']);
@@ -102,14 +103,17 @@ export function EditorPane() {
   }, []);
 
   // Heartbeat: any new message or completed tool call in the chat store
-  // bumps revision, which re-walks the VFS. Cheap because the FS is
-  // entirely in-memory (no syscalls).
+  // bumps revision, which re-walks the VFS. The interactive Shell tab
+  // also bumps `useVfsRevisionStore` after every command it runs, so
+  // user-typed mkdirs / installs / git operations show up without a
+  // click on the refresh button. Cheap because the FS is in-memory.
   const messageCount = useChatStore((s) => s.messages.length);
   const toolCallCount = useChatStore((s) =>
     s.messages.reduce((sum, m) => sum + (m.toolCalls?.length ?? 0), 0),
   );
+  const shellRevision = useVfsRevisionStore((s) => s.revision);
   const [manualTick, setManualTick] = useState(0);
-  const revision = messageCount + toolCallCount + manualTick;
+  const revision = messageCount + toolCallCount + shellRevision + manualTick;
 
   const [showHidden, setShowHidden] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);

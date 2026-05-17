@@ -65,6 +65,11 @@ export function ShellTab() {
     const session = new ShellSession(term, { fs, runtime });
     session.start();
     sessionRef.current = session;
+    // Focus the hidden helper textarea so the very first keystroke
+    // lands. Without this, the user has to click on the terminal
+    // before typing — which surprises people because the cursor is
+    // already blinking.
+    term.focus();
 
     // Resize observer keeps the shell sized to whatever the panel does
     // (tab switches, split-pane drags, browser resize). Cheap.
@@ -83,12 +88,23 @@ export function ShellTab() {
     };
   }, []);
 
+  // Clicks anywhere in the wrapper forward focus to xterm. xterm's own
+  // mousedown handler already focuses when the click lands on the
+  // .xterm element, but if a click hits padding or a sibling chrome
+  // pixel it would otherwise be a no-op. This is belt-and-suspenders.
+  const handleHostMouseDown = () => {
+    termRef.current?.focus();
+  };
+
   return (
-    <div className="flex-1 min-h-0 bg-[#0e0e12] overflow-hidden">
+    <div
+      className="flex-1 min-h-0 bg-[#0e0e12] overflow-hidden p-2"
+      onMouseDown={handleHostMouseDown}
+    >
       <div
         ref={containerRef}
         data-testid="shell-host"
-        className="w-full h-full p-2"
+        className="w-full h-full"
       />
     </div>
   );
