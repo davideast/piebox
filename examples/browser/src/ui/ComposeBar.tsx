@@ -1,6 +1,10 @@
 // Ported from playground-next, enhancer toggle removed (no enhancer in
-// piebox). Same Send / Stop interaction model.
+// piebox). Same Send / Stop interaction model, plus a `phase` prop so
+// the Stop button only shows while the LLM is producing tokens. During
+// tool execution (long-lived `bash` commands like `next start`) we show
+// a quieter "running…" pill — Stop is for LLM interactions only.
 import { useRef } from 'react';
+import type { SessionPhase } from '../store/session.js';
 
 interface ComposeBarProps {
   value: string;
@@ -8,6 +12,7 @@ interface ComposeBarProps {
   onSubmit: () => void;
   onStop?: () => void;
   sending?: boolean;
+  phase?: SessionPhase;
   disabled?: boolean;
   placeholder?: string;
 }
@@ -18,11 +23,14 @@ export function ComposeBar({
   onSubmit,
   onStop,
   sending = false,
+  phase = 'idle',
   disabled = false,
   placeholder = 'Ask the agent…',
 }: ComposeBarProps) {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const canSubmit = !disabled && !sending && value.trim().length > 0;
+  const showStop = sending && phase === 'llm';
+  const showToolBusy = sending && phase === 'tool';
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && canSubmit) {
@@ -46,14 +54,28 @@ export function ComposeBar({
       />
       <div className="flex items-center justify-between gap-3">
         <span className="text-[11px] text-slate-gray">⌘ / Ctrl + Enter to send</span>
-        {sending && onStop ? (
+        {showStop && onStop ? (
           <button
             type="button"
             onClick={onStop}
+            data-testid="stop-button"
             className="px-3 py-1.5 rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/10 transition-colors text-[12px] font-semibold"
           >
             Stop
           </button>
+        ) : showToolBusy ? (
+          // Tool is running (probably a long-lived bash like a dev
+          // server). Stop is hidden because it would kill the tool —
+          // and the user told us Stop is for LLM interactions only.
+          // Show a non-interactive busy pill instead.
+          <span
+            data-testid="tool-busy"
+            className="px-3 py-1.5 rounded-full border border-[#2a2a35] text-slate-gray text-[12px] font-semibold inline-flex items-center gap-2 cursor-default select-none"
+            title="A tool is running. The LLM is waiting on it. Use the top-right edit_square button to start a new chat if you need to abort."
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-gray animate-pulse" aria-hidden />
+            <span>Running tool…</span>
+          </span>
         ) : (
           <button
             type="button"

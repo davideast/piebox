@@ -13,6 +13,13 @@ interface TopBarProps {
    *  clipboard. Surfaced as a button next to the key icon so it's
    *  always one click away when debugging. */
   onCopySession?: () => void;
+  /** Clear chat history, terminal, and session counters so the next
+   *  prompt starts a fresh multi-turn conversation. Disabled (hidden)
+   *  while a turn is streaming so the abort path stays simple. */
+  onNewChat?: () => void;
+  /** True while a turn is in flight — used to disable the "New chat"
+   *  button so it doesn't race the active stream. */
+  newChatDisabled?: boolean;
   /** Slot rendered before the action icons — used for the model picker
    *  on desktop. Hidden on mobile via the consumer (`hidden md:flex`)
    *  because the TopBar there is tight; mobile users get the picker
@@ -20,7 +27,15 @@ interface TopBarProps {
   children?: ReactNode;
 }
 
-export function TopBar({ title, sessionState, onOpenKeys, onCopySession, children }: TopBarProps) {
+export function TopBar({
+  title,
+  sessionState,
+  onOpenKeys,
+  onCopySession,
+  onNewChat,
+  newChatDisabled = false,
+  children,
+}: TopBarProps) {
   return (
     <header
       className="bg-sidebar-bg border-b border-[#2a2a35] flex items-center justify-between px-4 shrink-0 z-30"
@@ -62,6 +77,18 @@ export function TopBar({ title, sessionState, onOpenKeys, onCopySession, childre
         ) : null}
 
         <div className="flex items-center gap-1">
+          {onNewChat ? (
+            <button
+              type="button"
+              onClick={onNewChat}
+              disabled={newChatDisabled}
+              title={newChatDisabled ? 'Stop the current turn first' : 'Start a new chat (clear history)'}
+              data-testid="new-chat"
+              className="text-slate-gray hover:text-soft-white transition-colors p-1.5 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <span className="material-symbols-outlined text-[18px]">edit_square</span>
+            </button>
+          ) : null}
           {onCopySession ? (
             <button
               type="button"
