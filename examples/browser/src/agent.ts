@@ -34,7 +34,7 @@ import {
   geminiEventsFromResponse,
 } from "@inbrowser/relay/providers/gemini";
 import type { PieboxFS, PieboxRuntime } from "piebox/browser";
-import { BUNDLED_TEMPLATES } from "./templates/vite-react-ts.js";
+import { runInSandbox } from "./runtime/translators.js";
 import {
   gitInit,
   gitStatus,
@@ -168,283 +168,10 @@ function fail(summary: string, data?: unknown): ToolResult {
   return { ok: false, summary, data };
 }
 
-// ── `npm create` / `npm init <name>` translation ──────────────────────────
-// STOPGAP: almostnode's npm shim (shims/child_process.ts) doesn't implement
-// `create` or `init <pkg>`. The architecturally correct fix is to add those
-// cases to almostnode's npm switch alongside install/run/start/test/ls.
-// Until that PR lands, this wrapper does the translation in piebox's bash
-// tool.
-//
-// What npm actually does for `npm create <x>`:
-//   1. translate `<x>` → `create-<x>` (or `@scope/<x>` → `@scope/create-<x>`)
-//   2. ensure the package is available (npm exec / cache resolve)
-//   3. spawn its `bin` entry with INIT_CWD set, in a TTY, with npm_* env vars
-//
-// What we do — a *simplification*, not a faithful copy:
-//   1. apply the same name → create-name rule (faithful)
-//   2. `npm install <create-pkg>@<version>` into the project node_modules
-//      (npm uses a temp/cache; we don't — that's the cosmetic diff)
-//   3. resolve the bin from the installed package.json
-//   4. `node ./node_modules/<create-pkg>/<bin>` with the user's args
-//
-// What we miss vs. real npm: TTY/interactivity, `INIT_CWD`,
-// `npm_command` / `npm_config_*` env vars, the npm-managed cache. Documented
-// in the system prompt + surfaced to the agent in the bash output below.
-
-// Matches `npm create <name>[@version] [...rest]` and `npm init <name>...`.
-// Name may be scoped (`@vitejs/app`) or plain (`vite`, `next-app`).
-const NPM_CREATE_RE = /^npm\s+(?:create|init)\s+(@?[\w./-]+?)(?:@([\w.-]+))?(?:\s+(.+))?$/;
-
-// Matches `node -e "<code>"` or `node --eval '<code>'` — almostnode's node
-// shim doesn't parse flags, so we capture the code and run it via a tempfile.
-// STOPGAP for piebox#3 (node flag parsing). Quote handling is best-effort.
-const NODE_E_RE = /^node\s+(?:-e|--eval)\s+(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(\S.*))$/;
-
-// Matches bare `npm install` / `npm i` / `npm add` (no package argument, no
-// flags that suppress devDeps). The backstop only runs in this case — when
-// the agent passes packages explicitly, we don't second-guess them.
-const NPM_INSTALL_BARE_RE = /^npm\s+(?:install|i|add)\s*$/;
-
-/**
- * STOPGAP for piebox#2: almostnode's `npm install` (no args) silently skips
- * devDependencies. After the real install runs, read /work/package.json and
- * install any devDeps that aren't in node_modules. The agent sees a
- * `[piebox]` notice listing what was added.
- */
-async function installMissingDevDeps(
-  ctx: { fs: PieboxFS; runtime: PieboxRuntime; cwd: string; signal: AbortSignal },
-): Promise<{ added: string[]; failed: string[]; output: string }> {
-  const lines: string[] = [];
-  let added: string[] = [];
-  let failed: string[] = [];
-
-  try {
-    const pkgJsonRaw = ctx.fs.readFileSync(`${ctx.cwd}/package.json`, "utf-8") as string;
-    const pkgJson = JSON.parse(pkgJsonRaw) as { devDependencies?: Record<string, string> };
-    const devDeps = pkgJson.devDependencies ?? {};
-    const missing: Array<[string, string]> = [];
-    for (const [name, version] of Object.entries(devDeps)) {
-      const isInstalled = ctx.fs.existsSync(`${ctx.cwd}/node_modules/${name}/package.json`);
-      if (!isInstalled) missing.push([name, version]);
-    }
-    if (missing.length === 0) return { added, failed, output: "" };
-
-    lines.push(
-      `\n[piebox] piebox#2 backstop: \`npm install\` skipped ${missing.length} devDependency entries.`,
-      `[piebox] installing them individually (the per-package install path works):`,
-    );
-    for (const [name, version] of missing) {
-      const spec = version.startsWith("^") || version.startsWith("~") || /^\d/.test(version)
-        ? `${name}@${version}`
-        : name; // git/file/etc specs we'd need to think about; for now pass bare
-      lines.push(`[piebox]   npm install ${spec}`);
-      const r = await ctx.runtime.run(`npm install ${spec}`, { cwd: ctx.cwd, signal: ctx.signal });
-      if (r.exitCode === 0) added.push(name);
-      else {
-        failed.push(name);
-        lines.push(`[piebox]   ↳ ${name} install failed (exit ${r.exitCode})`);
-      }
-    }
-    if (added.length) lines.push(`[piebox] backstop installed: ${added.join(", ")}`);
-    if (failed.length) lines.push(`[piebox] backstop FAILED for: ${failed.join(", ")}`);
-  } catch (e) {
-    lines.push(`[piebox] devDeps backstop skipped: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  return { added, failed, output: lines.join("\n") + "\n" };
-}
-
-/**
- * STOPGAP for almostnode#18: write the inline code to a tempfile, run it,
- * delete the tempfile. The agent sees a `[piebox]` notice explaining what
- * happened so the translation is debuggable.
- */
-async function runNodeE(
-  ctx: { fs: PieboxFS; runtime: PieboxRuntime; cwd: string; signal: AbortSignal },
-  code: string,
-): Promise<ToolResult> {
-  const tmpName = `__piebox_eval_${Date.now()}.mjs`;
-  const tmpPath = `${ctx.cwd}/${tmpName}`;
-
-  const notice =
-    `[piebox] \`node -e\` flag not in almostnode's node shim; translating to:\n` +
-    `[piebox]   write ${tmpName} (${code.length} chars)\n` +
-    `[piebox]   node ${tmpName}\n` +
-    `[piebox]   delete ${tmpName}\n` +
-    `[piebox] ─────\n`;
-
-  try {
-    ctx.fs.writeFileSync(tmpPath, code);
-  } catch (e) {
-    return {
-      ok: false,
-      summary: `node -e failed: tempfile write`,
-      data: { stdout: "", stderr: notice + (e instanceof Error ? e.message : String(e)), exitCode: 1 },
-    };
-  }
-
-  const run = await ctx.runtime.run(`node ${tmpName}`, { cwd: ctx.cwd, signal: ctx.signal });
-
-  // Best-effort cleanup; never let it shadow the real result.
-  try { ctx.fs.unlinkSync(tmpPath); } catch { /* no-op */ }
-
-  const combined = notice + (run.stdout || "") + (run.stderr || "");
-  if (run.exitCode === 0) {
-    return { ok: true, summary: `exit=0 (translated from node -e)`, data: { stdout: combined, stderr: "", exitCode: 0 } };
-  }
-  return { ok: false, summary: `exit=${run.exitCode}`, data: { stdout: "", stderr: combined, exitCode: run.exitCode } };
-}
-
-/**
- * Write a bundled template's files directly into the cwd. Used to bypass
- * `create-*` packages that hit substrate gaps (e.g. create-vite needs
- * `util.styleText` which almostnode doesn't ship; see piebox#1).
- *
- * The agent gets a `[piebox]` notice explaining the swap so the markdown
- * record of the session shows where the files came from.
- */
-function scaffoldFromTemplate(
-  ctx: { fs: PieboxFS; cwd: string },
-  templateName: string,
-  files: Record<string, string>,
-): ToolResult {
-  const notice =
-    `[piebox] npm create vite --template ${templateName} → bundled template scaffolder\n` +
-    `[piebox] (piebox#1: create-vite@9 fails on almostnode's missing util.styleText)\n` +
-    `[piebox] writing ${Object.keys(files).length} file(s) to ${ctx.cwd}...\n`;
-  const lines: string[] = [notice];
-
-  try {
-    for (const [relPath, content] of Object.entries(files)) {
-      const fullPath = `${ctx.cwd}/${relPath}`;
-      const parent = fullPath.split("/").slice(0, -1).join("/") || "/";
-      ctx.fs.mkdirSync(parent, { recursive: true });
-      ctx.fs.writeFileSync(fullPath, content);
-      lines.push(`  + ${relPath} (${content.length} bytes)`);
-    }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return {
-      ok: false,
-      summary: `bundled template '${templateName}' failed during write: ${msg}`,
-      data: { stdout: "", stderr: lines.join("\n") + `\n[piebox] write failed: ${msg}\n`, exitCode: 1 },
-    };
-  }
-
-  lines.push(
-    "",
-    `[piebox] template installed. Next steps:`,
-    `[piebox]   1. npm install                              # installs all deps from package.json`,
-    `[piebox]   2. node ./node_modules/vite/bin/vite.js     # starts dev server (preview iframe will appear)`,
-    ``,
-  );
-  return {
-    ok: true,
-    summary: `scaffolded ${templateName} template (${Object.keys(files).length} files)`,
-    data: { stdout: lines.join("\n"), stderr: "", exitCode: 0 },
-  };
-}
-
-async function runNpmCreate(
-  ctx: { fs: PieboxFS; runtime: PieboxRuntime; cwd: string; signal: AbortSignal },
-  rawName: string,
-  version: string,
-  rest: string,
-): Promise<ToolResult> {
-  // npm's documented translation rule.
-  const pkg = rawName.startsWith("@")
-    ? rawName.replace(/^(@[^/]+)\/(.+)$/, "$1/create-$2")
-    : `create-${rawName}`;
-  // Strip bash's `--` forwarding separator; the create binary owns its argv parser.
-  const args = rest.replace(/(^|\s)--(\s+|$)/g, " ").trim();
-
-  // ── Short-circuit: bundled templates (piebox#1 mitigation) ─────────────
-  // For known `npm create vite --template <name>` invocations, write the
-  // template files directly. Bypasses create-vite entirely (which fails on
-  // almostnode's missing util.styleText). Bundled templates also pre-stage
-  // their package.json with everything in `dependencies` to sidestep
-  // piebox#2 (npm install skipping devDeps).
-  if (rawName === "vite") {
-    const tmplMatch = /--template\s+(\S+)/.exec(args);
-    const tmplName = tmplMatch?.[1] ?? "react-ts";
-    const template = BUNDLED_TEMPLATES[tmplName];
-    if (template) {
-      return scaffoldFromTemplate(ctx, tmplName, template);
-    }
-    // Unknown template: fall through to the install+run path so the agent
-    // at least sees the failure mode it expects.
-  }
-
-  const notice =
-    `[piebox] npm create/init is not in almostnode's shim; translating to:\n` +
-    `[piebox]   npm install ${pkg}@${version}\n` +
-    `[piebox]   node ./node_modules/${pkg}/<bin> ${args || "(no args)"}\n` +
-    `[piebox] Limits: no TTY (interactive prompts fail), no INIT_CWD/npm_* env vars.\n` +
-    `[piebox] Use --template / --yes / --ts flags for non-interactive scaffolders.\n` +
-    `[piebox] ─────\n`;
-
-  // Step 1: install the create-* package.
-  const install = await ctx.runtime.run(`npm install ${pkg}@${version}`, {
-    cwd: ctx.cwd,
-    signal: ctx.signal,
-  });
-  const installOut = (install.stdout || "") + (install.stderr || "");
-  if (install.exitCode !== 0) {
-    const combined =
-      notice + installOut +
-      `\n[piebox] install of ${pkg}@${version} failed (exit ${install.exitCode}); aborting translation.\n`;
-    return {
-      ok: false,
-      summary: `npm create failed: install exited ${install.exitCode}`,
-      data: { stdout: "", stderr: combined, exitCode: install.exitCode },
-    };
-  }
-
-  // Step 2: resolve the bin entry from the installed package.json.
-  let binPath: string;
-  try {
-    const raw = ctx.fs.readFileSync(
-      `${ctx.cwd}/node_modules/${pkg}/package.json`,
-      "utf-8",
-    ) as string;
-    const pkgJson = JSON.parse(raw) as { bin?: string | Record<string, string> };
-    if (typeof pkgJson.bin === "string") {
-      binPath = pkgJson.bin;
-    } else if (pkgJson.bin && typeof pkgJson.bin === "object") {
-      const entries = Object.values(pkgJson.bin);
-      if (entries.length === 0) throw new Error("empty bin object");
-      binPath = entries[0]!;
-    } else {
-      throw new Error(`no bin field in ${pkg}/package.json — not a runnable scaffolder`);
-    }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    const combined = notice + installOut + `\n[piebox] cannot resolve bin for ${pkg}: ${msg}\n`;
-    return {
-      ok: false,
-      summary: `npm create failed: bin resolution`,
-      data: { stdout: "", stderr: combined, exitCode: 1 },
-    };
-  }
-
-  // Step 3: run the bin via node.
-  const runCmd = `node ./node_modules/${pkg}/${binPath} ${args}`.trim();
-  const run = await ctx.runtime.run(runCmd, { cwd: ctx.cwd, signal: ctx.signal });
-  const combined =
-    notice + installOut + `\n[piebox] $ ${runCmd}\n` + (run.stdout || "") + (run.stderr || "");
-
-  if (run.exitCode === 0) {
-    return {
-      ok: true,
-      summary: `npm create succeeded (translated to install + node ./node_modules/${pkg}/${binPath})`,
-      data: { stdout: combined, stderr: "", exitCode: 0 },
-    };
-  }
-  return {
-    ok: false,
-    summary: `npm create failed: ${pkg} bin exited ${run.exitCode}`,
-    data: { stdout: "", stderr: combined, exitCode: run.exitCode },
-  };
-}
+// Substrate translators (npm create, node -e, devDeps backstop,
+// [piebox hint] postprocessor, git argv shim) live in
+// ./runtime/translators.ts + ./runtime/git-shim.ts so the agent's bash
+// tool and the interactive Shell tab share one implementation.
 
 function buildTools(deps: ToolDeps): ToolHandler[] {
   const { fs, runtime, cwd } = deps;
@@ -531,7 +258,9 @@ function buildTools(deps: ToolDeps): ToolHandler[] {
     name: "bash",
     description:
       "Run a shell command in the in-browser sandbox. `node` and `npm` work. " +
-      "`npm create <name>` and `npm init <name>` are translated by piebox to install + run-bin (see [piebox] notice in output for limits).",
+      "`npm create <name>` and `npm init <name>` are translated by piebox to install + run-bin. " +
+      "`git <subcommand>` is routed to isomorphic-git for init/status/add/commit/log/branch/checkout. " +
+      "See [piebox] notice lines in the output for any translations applied.",
     parameters: {
       type: "object",
       properties: { command: { type: "string" } },
@@ -541,55 +270,13 @@ function buildTools(deps: ToolDeps): ToolHandler[] {
       if (ctx.signal.aborted) return fail("cancelled");
       const { command } = args as { command: string };
 
-      // Pattern: `npm create <name>[@version] [...rest]` or `npm init <name>...`
-      const m = NPM_CREATE_RE.exec(command.trim());
-      if (m) {
-        const [, name, version = "latest", rest = ""] = m;
-        return await runNpmCreate(
-          { fs, runtime, cwd, signal: ctx.signal },
-          name!,
-          version,
-          rest,
-        );
-      }
-
-      // Pattern: `node -e "<code>"` / `node --eval '<code>'`
-      const eMatch = NODE_E_RE.exec(command.trim());
-      if (eMatch) {
-        const code = eMatch[1] ?? eMatch[2] ?? eMatch[3] ?? "";
-        return await runNodeE({ fs, runtime, cwd, signal: ctx.signal }, code);
-      }
-
       try {
-        const r = await runtime.run(command, { cwd, signal: ctx.signal });
-        let stdout = r.stdout;
-        let stderr = r.stderr;
-
-        // Backstop: bare `npm install` post-processing (piebox#2).
-        if (r.exitCode === 0 && NPM_INSTALL_BARE_RE.test(command.trim())) {
-          const backstop = await installMissingDevDeps({ fs, runtime, cwd, signal: ctx.signal });
-          if (backstop.output) stdout = (stdout ?? "") + backstop.output;
-        }
-
-        // Deterministic hint: when a command fails with "Cannot find module
-        // /.../node_modules/<pkg>/...", append a [piebox hint] line that
-        // names the missing package and the fix. Caught even when the model
-        // would otherwise gloss over the failure.
-        if (r.exitCode !== 0) {
-          const combined = (r.stdout || "") + (r.stderr || "");
-          const m = /Cannot find module ['"][^'"]*?\/node_modules\/(@[^/'"]+\/[^/'"]+|[^/'"]+)/.exec(combined);
-          if (m) {
-            const pkg = m[1]!;
-            const hint =
-              `\n[piebox hint] Package '${pkg}' is NOT installed in /work/node_modules.\n` +
-              `[piebox hint] Run \`npm install ${pkg}\` (or add it to package.json deps + \`npm install\`) before trying again.\n` +
-              `[piebox hint] If you just scaffolded a project manually because a create-* tool failed, you MUST install the framework's runtime deps yourself — the create-* package only installed itself, not the project's dependencies.\n`;
-            stderr = (stderr ?? "") + hint;
-          }
-        }
+        // All translations (npm create, node -e, devDeps backstop,
+        // [piebox hint] postprocessor, git argv shim) live in the
+        // shared runtime layer so the Shell tab can reuse them.
+        const r = await runInSandbox(command, { fs, runtime, cwd, signal: ctx.signal });
         const summary = `exit=${r.exitCode}`;
-        const data = { stdout, stderr, exitCode: r.exitCode };
-        return r.exitCode === 0 ? ok(summary, data) : fail(summary, data);
+        return r.exitCode === 0 ? ok(summary, r) : fail(summary, r);
       } catch (e) {
         return fail(`bash failed: ${e instanceof Error ? e.message : String(e)}`);
       }
