@@ -24,7 +24,19 @@
     // Some stricter flags (disabled by default)
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noPropertyAccessFromIndexSignature": false
+    "noPropertyAccessFromIndexSignature": false,
+
+    // Workspace path mapping — avoid the circular "piebox needs
+    // @piebox/driver-agent built, but driver-agent needs piebox built"
+    // dance during typecheck. Each package's published build still
+    // resolves through `exports` at consumer install time.
+    "baseUrl": ".",
+    "paths": {
+      "@piebox/driver-agent": ["./packages/driver-agent/src/index.ts"],
+      "piebox": ["./src/index.ts"],
+      "piebox/layer2": ["./src/layer2/index.ts"],
+      "piebox/operations": ["./src/operations/index.ts"]
+    }
   },
-  "exclude": ["dist", "examples", "packages", "node_modules"]
+  "exclude": ["dist", "examples", "node_modules", "packages"]
 }

@@ -4,6 +4,7 @@ import type { Result } from "../shared/result.js";
 import { ok, fail } from "../shared/result.js";
 import { SandboxManager } from "../../sandbox-manager.js";
 import { resolveModel } from "../../utils/model-resolver.js";
+import { createSandboxedSession } from "@piebox/driver-agent";
 
 export class PromptHandler implements IPromptService {
   constructor(private manager: SandboxManager) {}
@@ -35,7 +36,12 @@ export class PromptHandler implements IPromptService {
     }
 
     try {
-      const session = await sb.createSession({ model: resolvedModel });
+      const { session } = await createSandboxedSession({
+        model: resolvedModel,
+        vfs: sb.fs,
+        bash: sb.shell,
+        cwd: sb.cwd,
+      });
       await session.prompt(prompt);
     } catch (e: unknown) {
       return fail("SESSION_FAILED", (e instanceof Error ? e.message : String(e)) || "Session prompt failed");

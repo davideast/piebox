@@ -6,20 +6,46 @@
  *   sandbox.shell  ← just-bash (shell interpreter over the same fs)
  *   sandbox.git    ← isomorphic-git (after clone, same fs)
  *
+ * The piebox core exposes the substrate and Layer 2 capability
+ * surface. Agent-loop integration (sessions, skills, the agent SDK
+ * adapter, the SDK toolset) lives in `@piebox/driver-agent`. MCP
+ * server integration lives in `@piebox/driver-mcp`.
+ *
+ * Step 5 of the composable-sandbox migration plan
+ * (`docs/investigations/G-migration.md`) moved the following exports
+ * out of `piebox`:
+ *   - `createSandboxedSession` → `@piebox/driver-agent`
+ *   - `loadSkillsFromVFS` + `LoadSkillsFromVFSOptions` → `@piebox/driver-agent`
+ *   - `SandboxSessionOptions` / `SandboxSessionResult` → `@piebox/driver-agent`
+ *   - `Skill` + `createSyntheticSourceInfo` re-exports → `@piebox/driver-agent`
+ *   - `createNpmInfoToolDefinition` → replaced by the `npmInfoTool`
+ *     `PieboxTool` exported from `piebox/tools/npm-info`. Wire it via
+ *     `createToolset([...standard, npmInfoTool])` from `piebox/layer2`.
+ *   - `sandbox().createSession(...)` method → replaced by
+ *     `createSandboxedSession({ vfs: sb.fs, bash: sb.shell, cwd: sb.cwd })`
+ *     from `@piebox/driver-agent`.
+ *
+ * `createSandboxedTools` is retained but its return type changed from
+ * the agent SDK's `ToolDefinition[]` to Layer 2's `PieboxToolset`.
+ *
  * @example
  * ```ts
  * import { sandbox } from "piebox";
+ * import { createSandboxedSession } from "@piebox/driver-agent";
  * import { getModel } from "@earendil-works/pi-ai";
  *
  * const sb = sandbox();
  * await sb.clone({ url: "https://github.com/user/repo" });
  *
- * const session = await sb.createSession({
+ * const { session } = await createSandboxedSession({
  *   model: getModel("google", "gemini-3-flash-preview"),
+ *   vfs: sb.fs,
+ *   bash: sb.shell,
+ *   cwd: sb.cwd,
  * });
  *
  * await session.prompt("Refactor the error handling.");
- * const changed = await sb.git.modifiedFiles();
+ * const changed = await sb.git?.modifiedFiles();
  * ```
  */
 
@@ -30,7 +56,6 @@ export type {
   SandboxOptions,
   SandboxInstance,
   SandboxCloneOptions,
-  SessionOptions,
   VFSSnapshot,
   ExportOptions,
   ExportResult,
@@ -45,23 +70,14 @@ export type { SecretsConfig, SecretsFullConfig, ResolvedSecrets } from "./secret
 
 export type { CloneOptions, CloneResult, GitUtilities } from "./git.js";
 
-// ─── Skills ─────────────────────────────────────────────────────────────────
-
-export type { Skill } from "@earendil-works/pi-coding-agent";
-export { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";
-export { loadSkillsFromVFS } from "./skills.js";
-export type { LoadSkillsFromVFSOptions } from "./skills.js";
-
 // ─── Advanced API ───────────────────────────────────────────────────────────
 // Escape hatches for consumers who need lower-level access.
 
-export { createSandboxedSession } from "./session.js";
-export type { SandboxSessionOptions, SandboxSessionResult } from "./types.js";
 export { cloneIntoSandbox, createGitUtilities } from "./git.js";
 export { createSandboxedTools } from "./tools.js";
 export type { SandboxedToolsOptions } from "./tools.js";
-export { createNpmInfoToolDefinition } from "./tools/npm-info.js";
-export type { NpmInfoToolOptions } from "./tools/npm-info.js";
+export { npmInfoTool } from "./tools/npm-info.js";
+export type { NpmInfoArgs } from "./tools/npm-info.js";
 export { createBashFsAdapter } from "./adapters/bash-fs-adapter.js";
 export { createGitFsAdapter } from "./adapters/git-fs-adapter.js";
 

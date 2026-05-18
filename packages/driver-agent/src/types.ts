@@ -1,11 +1,13 @@
 /**
- * Public types for the piebox library.
+ * Public types for `@piebox/driver-agent`'s server-side session
+ * factory (`createSandboxedSession`).
  *
- * Architecture:
- *   @platformatic/vfs  ← foundation (node:fs-compatible in-memory filesystem)
- *       ├── just-bash  ← shell interpreter (via IFileSystem adapter)
- *       ├── Pi SDK     ← tool operations (via direct VFS access)
- *       └── (future)   ← isomorphic-git, Node.js require(), etc.
+ * Moved from `piebox`'s `src/types.ts` in Step 5 of the
+ * composable-sandbox migration plan
+ * (`docs/investigations/G-migration.md`). The shape is unchanged
+ * other than the added `sandbox` + `cwd` fields on
+ * `SandboxSessionResult`, which surface the Layer 2 substrate the
+ * session was built over.
  */
 
 import type { Model } from "@earendil-works/pi-ai";
@@ -17,7 +19,8 @@ import type {
   ToolDefinition,
   AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import type { PieboxFS as VirtualFileSystem } from "./fs/index.js";
+import type { PieboxFS as VirtualFileSystem } from "piebox";
+import type { Sandbox } from "piebox/layer2";
 import type { Bash, BashOptions } from "just-bash";
 
 /** Options for creating a sandboxed agent session. */
@@ -33,7 +36,7 @@ export interface SandboxSessionOptions {
   cwd?: string;
 
   /**
-   * Pre-configured @platformatic/vfs instance.
+   * Pre-configured PieboxFS instance.
    * When provided, seed files are still applied on top.
    * Use this for custom VFS configurations (overlay, sqlite provider, etc.).
    */
@@ -119,7 +122,7 @@ export interface SandboxSessionResult {
   session: AgentSession;
 
   /**
-   * The @platformatic/vfs instance — the filesystem foundation.
+   * The PieboxFS instance — the filesystem foundation.
    * Pass this to isomorphic-git, use with `vfs.mount()`, or access
    * files directly via `vfs.readFileSync()` / `vfs.writeFileSync()`.
    */
@@ -127,4 +130,14 @@ export interface SandboxSessionResult {
 
   /** The just-bash instance for direct shell execution. */
   bash: Bash;
+
+  /**
+   * The Layer 2 Sandbox the session was built over. Exposes the
+   * substrate fingerprint (`capabilities`) and workflow surfaces
+   * (`toTarball`, `applyPatch`, lifecycle events).
+   */
+  sandbox: Sandbox;
+
+  /** Virtual working directory all tool operations are scoped to. */
+  cwd: string;
 }

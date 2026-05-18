@@ -1,27 +1,36 @@
 /**
- * sandbox() — the primary abstraction.
+ * sandbox() — the primary substrate abstraction.
  *
- * Creates a lightweight, in-memory execution environment for agents.
- * The sandbox composes three capabilities:
+ * Creates a lightweight, in-memory execution environment. The sandbox
+ * composes three capabilities:
  *
  *   sandbox.fs     — @platformatic/vfs (node:fs-compatible)
  *   sandbox.shell  — just-bash (shell interpreter)
  *   sandbox.git    — isomorphic-git utilities (after clone)
  *
- * The sandbox's job is wiring: fs, shell, and git share
- * the same in-memory filesystem. Tools created by createSession()
- * are pre-bound to these shared instances.
+ * The sandbox's job is wiring: fs, shell, and git share the same
+ * in-memory filesystem.
+ *
+ * Agent-loop concerns (session, skills, tools-for-LLM) moved to
+ * `@piebox/driver-agent` in Step 5 of the composable-sandbox
+ * migration plan. The pre-Step-5 `sandbox().createSession({ model })`
+ * method is now `createSandboxedSession({ model, vfs, bash, cwd })`
+ * imported from `@piebox/driver-agent`.
  *
  * @example
  * ```ts
  * import { sandbox } from "piebox";
+ * import { createSandboxedSession } from "@piebox/driver-agent";
  * import { getModel } from "@earendil-works/pi-ai";
  *
  * const sb = sandbox();
  * await sb.clone({ url: "https://github.com/user/repo" });
  *
- * const session = await sb.createSession({
+ * const { session } = await createSandboxedSession({
  *   model: getModel("google", "gemini-3-flash-preview"),
+ *   vfs: sb.fs,
+ *   bash: sb.shell,
+ *   cwd: sb.cwd,
  * });
  * await session.prompt("Add error handling to src/");
  *
@@ -29,31 +38,12 @@
  * ```
  */
 
-import type { Model } from "@earendil-works/pi-ai";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type {
-  AgentSession,
-  AuthStorage,
-  ModelRegistry,
-  Skill,
-  ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
-import {
-  AuthStorage as AuthStorageImpl,
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRegistry as ModelRegistryImpl,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
 import { create as createVFS } from "./fs/index.js";
 import type { PieboxFS as VirtualFileSystem } from "./fs/index.js";
 import { Bash, type BashOptions } from "just-bash";
 import type { AllowedUrlEntry } from "just-bash";
 import { createBashFsAdapter } from "./adapters/bash-fs-adapter.js";
-import { createSandboxedTools } from "./tools.js";
-import { loadSkillsFromVFS } from "./skills.js";
-import { cloneIntoSandbox, createGitUtilities, type CloneOptions, type GitUtilities } from "./git.js";
+import { cloneIntoSandbox, type CloneOptions, type GitUtilities } from "./git.js";
 import {
   resolveSecrets,
   generateBootstrap,
@@ -187,39 +177,6 @@ export interface SandboxOptions {
   snapshot?: VFSSnapshot;
 }
 
-/** Options for creating an agent session within a sandbox. */
-export interface SessionOptions {
-  /** Model to use. Required. */
-  model: Model<any>;
-
-  /** Thinking level for the model. */
-  thinkingLevel?: ThinkingLevel;
-
-  /**
-   * Additional system prompt lines appended after the sandbox preamble.
-   */
-  systemPrompt?: string[];
-
-  /**
-   * Skills to inject into the agent's system prompt.
-   * @default Auto-discovered from `{cwd}/.agents/skills/` in the VFS.
-   * Pass `[]` to disable auto-discovery.
-   */
-  skills?: Skill[];
-
-  /**
-   * Additional custom tools registered alongside the sandboxed built-ins.
-   * These are NOT sandboxed — they have full access to whatever they implement.
-   */
-  additionalTools?: ToolDefinition[];
-
-  /** Auth storage. @default AuthStorage.create() */
-  authStorage?: AuthStorage;
-
-  /** Model registry. @default ModelRegistry.create(authStorage) */
-  modelRegistry?: ModelRegistry;
-}
-
 /** The sandbox instance — a composable, in-memory execution environment. */
 export interface SandboxInstance {
   /** The in-memory filesystem. node:fs-compatible. */
@@ -257,22 +214,6 @@ export interface SandboxInstance {
   clone(options: SandboxCloneOptions): Promise<void>;
 
   /**
-   * Create an agent session wired to this sandbox's filesystem and shell.
-   *
-   * Skills are auto-discovered from `{cwd}/.agents/skills/` in the VFS
-   * unless explicitly overridden via `options.skills`.
-   *
-   * @example
-   * ```ts
-   * const session = await sb.createSession({
-   *   model: getModel("google", "gemini-3-flash-preview"),
-   * });
-   * await session.prompt("Explain this codebase.");
-   * ```
-   */
-  createSession(options: SessionOptions): Promise<AgentSession>;
-
-  /**
    * Take a snapshot of the current VFS state.
    * Can be passed to `sandbox({ snapshot })` to restore the state later.
    */
@@ -294,45 +235,13 @@ export type SandboxCloneOptions = Omit<CloneOptions, "dir" | "vfs">;
 
 const DEFAULT_CWD = "/sandbox";
 
-const SANDBOX_SYSTEM_PROMPT = [
-  "You are operating in a sandboxed environment.",
-  "All file operations target an in-memory virtual filesystem.",
-  "The bash tool supports full shell syntax: pipes, redirections, variables, loops, and 80+ built-in commands.",
-];
-
-const RUNTIME_NODE_PROMPT = [
-  "",
-  "## JavaScript Runtime",
-  "This sandbox has a QuickJS-based JS/TS runtime. Use `js-exec` (not `node`) to run scripts:",
-  "  js-exec script.js          — run a file",
-  "  js-exec -c 'code'          — inline code",
-  "  js-exec app.ts             — TypeScript (auto-stripped)",
-  "",
-  "Available: require/import, fs, path, child_process (execSync), process, console, fetch().",
-  "NOT available: npm, yarn, pnpm, bun, or any package manager. There is no node_modules.",
-  "To check npm packages, use fetch() against https://registry.npmjs.org/<package>/latest.",
-  "To run HTTP requests, use curl or fetch() inside js-exec.",
-];
-
-/**
- * Build system prompt lines based on sandbox options.
- */
-function buildSystemPrompt(options?: SandboxOptions): string[] {
-  const lines = [...SANDBOX_SYSTEM_PROMPT];
-  // Add runtime-specific instructions
-  const hasNodeRuntime = options?.runtime === "node" ||
-    (options?.bashOptions?.javascript !== undefined && options?.bashOptions?.javascript !== false);
-  if (hasNodeRuntime) {
-    lines.push(...RUNTIME_NODE_PROMPT);
-  }
-  if (options?.network && options.network.length > 0) {
-    lines.push("", `Network access: ${options.network.join(", ")}`);
-  }
-  return lines;
-}
-
 /**
  * Create a sandbox — a lightweight, in-memory execution environment.
+ *
+ * Agent-loop integration moved to `@piebox/driver-agent` in Step 5
+ * of the composable-sandbox migration plan. Pass the sandbox's fs,
+ * shell, and cwd into `createSandboxedSession` from the driver
+ * package to bind an agent loop.
  *
  * @example
  * ```ts
@@ -343,10 +252,13 @@ function buildSystemPrompt(options?: SandboxOptions): string[] {
  *
  * await sb.clone({ url: "https://github.com/user/repo" });
  *
- * const session = await sb.createSession({ model });
- * await session.prompt("Refactor the code.");
+ * // To run an agent against this sandbox:
+ * //   import { createSandboxedSession } from "@piebox/driver-agent";
+ * //   const { session } = await createSandboxedSession({
+ * //     model, vfs: sb.fs, bash: sb.shell, cwd: sb.cwd,
+ * //   });
  *
- * const changed = await sb.git.modifiedFiles();
+ * const changed = await sb.git?.modifiedFiles();
  * ```
  */
 export function sandbox(options?: SandboxOptions): SandboxInstance {
@@ -478,79 +390,12 @@ export function sandbox(options?: SandboxOptions): SandboxInstance {
       git = result.git;
     },
 
-    async createSession(sessionOptions: SessionOptions): Promise<AgentSession> {
-      // Auto-discover skills from the VFS unless explicitly overridden
-      let skills: Skill[];
-      if (sessionOptions.skills !== undefined) {
-        skills = sessionOptions.skills;
-      } else {
-        skills = loadSkillsFromVFS({
-          vfs,
-          dir: `${cwd}/.agents/skills`,
-        });
-      }
-
-      const hasSkills = skills.length > 0;
-
-      const authStorage =
-        sessionOptions.authStorage ?? AuthStorageImpl.create();
-      const modelRegistry =
-        sessionOptions.modelRegistry ?? ModelRegistryImpl.create(authStorage);
-      const settingsManager = SettingsManager.inMemory();
-
-      const systemPromptLines = [
-        ...buildSystemPrompt(options),
-        ...(sessionOptions.systemPrompt ?? []),
-      ];
-
-      const resourceLoader = new DefaultResourceLoader({
-        cwd,
-        agentDir: `${cwd}/.pi`,
-        settingsManager,
-        noExtensions: true,
-        noSkills: !hasSkills,
-        noPromptTemplates: true,
-        noThemes: true,
-        noContextFiles: true,
-        appendSystemPrompt: systemPromptLines,
-        skillsOverride: hasSkills
-          ? (current) => ({
-              skills: [...current.skills, ...skills],
-              diagnostics: current.diagnostics,
-            })
-          : undefined,
-      });
-      await resourceLoader.reload();
-
-      // Auto-enable npm-info when registry.npmjs.org is in the network allowlist
-      const hasNpmRegistry = (options?.network ?? []).some(
-        (origin) => origin.includes("registry.npmjs.org"),
-      ) || (bashOptions.network?.allowedUrlPrefixes ?? []).some(
-        (entry: any) => (typeof entry === "string" ? entry : entry.url)?.includes("registry.npmjs.org"),
-      );
-
-      const sandboxedTools = createSandboxedTools(cwd, vfs, shell, {
-        npmInfo: hasNpmRegistry,
-      });
-      const allTools = sessionOptions.additionalTools
-        ? [...sandboxedTools, ...sessionOptions.additionalTools]
-        : sandboxedTools;
-
-      const { session } = await createAgentSession({
-        sessionManager: SessionManager.inMemory(),
-        authStorage,
-        modelRegistry,
-        model: sessionOptions.model,
-        thinkingLevel: sessionOptions.thinkingLevel,
-        settingsManager,
-        resourceLoader,
-        cwd,
-        noTools: "builtin",
-        customTools: allTools,
-      });
-
-      return session;
-    },
+    // Note: pre-Step-5 piebox exposed `createSession` here. The
+    // agent-loop integration moved to `@piebox/driver-agent`'s
+    // `createSandboxedSession` in Step 5 of the composable-sandbox
+    // migration plan (see docs/investigations/G-migration.md).
+    // Pass `{ vfs: sb.fs, bash: sb.shell, cwd: sb.cwd }` to bind the
+    // driver to this sandbox's substrate.
 
     snapshot(): VFSSnapshot {
       const files: VFSSnapshot["files"] = [];
