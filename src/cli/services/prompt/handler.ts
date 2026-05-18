@@ -4,7 +4,7 @@ import type { Result } from "../shared/result.js";
 import { ok, fail } from "../shared/result.js";
 import { SandboxManager } from "../../sandbox-manager.js";
 import { resolveModel } from "../../utils/model-resolver.js";
-import { createSandboxedSession } from "@piebox/driver-agent";
+import { createSandboxedSession } from "@piebox/driver-agent/server";
 
 export class PromptHandler implements IPromptService {
   constructor(private manager: SandboxManager) {}

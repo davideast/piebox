@@ -65,12 +65,19 @@ export interface AgentChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   text?: string;
   /** Tool calls attached to an assistant message. Each entry's
-   *  `resultJson` is patched in after the corresponding tool resolves. */
+   *  `resultJson` is patched in after the corresponding tool resolves.
+   *
+   *  `signature` carries provider-specific round-trip data. Gemini
+   *  requires its `thoughtSignature` to be echoed back on the next
+   *  turn's matching assistant message — without it the API returns
+   *  400 "Function call is missing a thought_signature". Adapters
+   *  for providers that don't use signatures leave this undefined. */
   toolCalls?: ReadonlyArray<{
     id: string;
     name: string;
     argsJson: string;
     resultJson?: string;
+    signature?: string;
   }>;
   /** Set on `role: "tool"` messages. */
   toolCallId?: string;

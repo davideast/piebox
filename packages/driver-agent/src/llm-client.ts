@@ -60,6 +60,14 @@ export type ChatChunk =
       id: string;
       name: string;
       args: Record<string, unknown>;
+      /** Provider-specific signature carried through round-trips. Gemini
+       *  emits a `thoughtSignature` on each functionCall part; that
+       *  signature MUST be echoed back to Gemini in the matching
+       *  assistant message on the next turn, or the API returns 400
+       *  "Function call is missing a thought_signature". The driver
+       *  saves this on `AgentChatMessage.toolCalls[].signature` so the
+       *  next request can replay it. Other providers leave it undefined. */
+      signature?: string;
     }
   | {
       kind: "turn_complete";

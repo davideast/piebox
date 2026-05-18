@@ -13,8 +13,14 @@
  * are interchangeable.
  */
 
-import { gzipSync } from "node:zlib";
 import type { PieboxFS } from "../fs/types.js";
+
+// `node:zlib` is loaded lazily inside `vfsToTarball` so importing
+// `piebox/layer2` from the browser doesn't trigger Vite's externalized-
+// Node-module shim at module-load time. Browser consumers that never
+// call `Sandbox.toTarball` never reach this import; consumers that do
+// will get a clean runtime error from the absent module rather than a
+// page-loading crash.
 
 export interface VfsToTarballOptions {
   /** Where to root the walk. Defaults to the sandbox cwd. */
@@ -33,6 +39,14 @@ export async function vfsToTarball(
   fs: PieboxFS,
   options: VfsToTarballOptions,
 ): Promise<Uint8Array> {
+  // Dynamic import so the module-level evaluation of this file (e.g.
+  // when a browser bundle imports `piebox/layer2` for the Sandbox /
+  // tool types) doesn't reach `node:zlib`. On Node this is a single
+  // resolved-module lookup; in the browser it throws at call time,
+  // which is the right behavior for `toTarball` running where there's
+  // no zlib.
+  const { gzipSync } = await import("node:zlib");
+
   const { root, exclude = DEFAULT_EXCLUDES, compressionLevel = 6 } = options;
 
   const entries: Array<{ path: string; content: Buffer }> = [];

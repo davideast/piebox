@@ -15,7 +15,7 @@ import { createVFS } from "./src/index.js";
 import {
   createSandboxedSession,
   loadSkillsFromVFS,
-} from "@piebox/driver-agent";
+} from "@piebox/driver-agent/server";
 import { getModel } from "@earendil-works/pi-ai";
 import { appendFile } from "node:fs";
 import * as path from "node:path";

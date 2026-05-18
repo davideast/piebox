@@ -48,23 +48,13 @@ export {
 } from "./adapters/inbrowser-agent.js";
 export type { GeminiClientConfig } from "./adapters/inbrowser-agent.js";
 
-// ─── Step 5 — server path (session/skills surface, pi-coding-agent adapter) ───
-
-export { createSandboxedSession } from "./session.js";
-export type {
-  SandboxSessionOptions,
-  SandboxSessionResult,
-} from "./types.js";
-export { loadSkillsFromVFS } from "./skills.js";
-export type { LoadSkillsFromVFSOptions } from "./skills.js";
-export { createPiCodingAgentSession } from "./adapters/pi-coding-agent.js";
-export type {
-  AgentSession,
-  Skill,
-  ToolDefinition,
-  PiCodingAgentSessionInputs,
-} from "./adapters/pi-coding-agent.js";
-export { AuthStorage, ModelRegistry } from "./adapters/pi-coding-agent.js";
-// Re-export `createSyntheticSourceInfo` from the agent SDK for
-// consumers that build their own Skill objects.
-export { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";
+// ─── Step 5 — server path moved to `./server` sub-entry ───
+//
+// The session/skills surface used to live here too. It moved to
+// `@piebox/driver-agent/server` so the browser playground (which only
+// consumes the Step-4 surface above) doesn't transitively pull
+// `@earendil-works/pi-coding-agent` and its `node:url` / `node:fs`
+// dependencies into the Vite bundle. Server-side consumers (CLI
+// handlers, the driver-mcp stdio entry) explicitly import:
+//
+//     import { createSandboxedSession } from "@piebox/driver-agent/server";
