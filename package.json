@@ -63,9 +63,8 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^0.74.0",
     "@earendil-works/pi-ai": "^0.74.0",
-    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@piebox/driver-agent": "workspace:*",
     "@platformatic/vfs": "^0.4.0",
     "citty": "^0.1.6",
     "diff": "^9.0.0",

@@ -11,6 +11,7 @@ import type { ICommitService } from "../commit/handler.js";
 import type { IExportService } from "../export/spec.js";
 import { sessionId } from "../../utils/session-id.js";
 import { getModel } from "@earendil-works/pi-ai";
+import { createSandboxedSession } from "@piebox/driver-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { appendFile } from "node:fs";
@@ -108,9 +109,13 @@ export class RunHandler implements IRunService {
 
     let session;
     try {
-      session = await sb.createSession({
+      const result = await createSandboxedSession({
         model: getModel("google", modelName as any),
+        vfs: sb.fs,
+        bash: sb.shell,
+        cwd: sb.cwd,
       });
+      session = result.session;
     } catch (e: unknown) {
       return fail("SESSION_FAILED", e instanceof Error ? e.message : String(e));
     }
@@ -273,14 +278,18 @@ export class RunHandler implements IRunService {
 
     let session;
     try {
-      session = await sb.createSession({
+      const result = await createSandboxedSession({
         model: getModel("google", modelName as any),
+        vfs: sb.fs,
+        bash: sb.shell,
+        cwd: sb.cwd,
         systemPrompt: [
           "The repo source code is seeded at /sandbox/ in the VFS.",
           "Build context docs are at /sandbox/.piebox-build/ (if present).",
           "Follow TDD strictly. Write tests first. Make them pass. Then refactor.",
         ],
       });
+      session = result.session;
     } catch (e: unknown) {
       return fail("SESSION_FAILED", e instanceof Error ? e.message : String(e));
     }

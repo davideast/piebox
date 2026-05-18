@@ -12,7 +12,7 @@
  *   3. Recurse into subdirectories to find SKILL.md files.
  */
 
-import type { PieboxFS as VirtualFileSystem } from "./fs/index.js";
+import type { PieboxFS as VirtualFileSystem } from "piebox";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";
 import * as path from "node:path";

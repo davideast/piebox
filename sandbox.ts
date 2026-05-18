@@ -11,11 +11,11 @@
  * by loadSkillsFromVFS — no host filesystem copy needed.
  */
 
+import { createVFS } from "./src/index.js";
 import {
   createSandboxedSession,
   loadSkillsFromVFS,
-  createVFS,
-} from "./src/index.js";
+} from "@piebox/driver-agent";
 import { getModel } from "@earendil-works/pi-ai";
 import { appendFile } from "node:fs";
 import * as path from "node:path";
@@ -69,7 +69,7 @@ const { session, bash } = await createSandboxedSession({
 });
 
 // Stream events to logs + stdout
-session.subscribe((event) => {
+session.subscribe((event: any) => {
   appendFile(
     `${logsDir}/${session.sessionId}.jsonl`,
     JSON.stringify(event) + "\n",

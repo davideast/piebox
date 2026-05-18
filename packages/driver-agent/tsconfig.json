@@ -14,9 +14,17 @@
     "declarationMap": true,
     "sourceMap": true,
     "verbatimModuleSyntax": true,
+
+    // Path mapping for the workspace's piebox package. Resolves to
+    // the source files directly so typecheck doesn't require a prior
+    // `tsc -p tsconfig.build.json` in the piebox root. The published
+    // build still resolves through `exports` at consumer install
+    // time.
     "baseUrl": ".",
     "paths": {
-      "piebox/layer2": ["../../src/layer2/index.ts"]
+      "piebox": ["../../src/index.ts"],
+      "piebox/layer2": ["../../src/layer2/index.ts"],
+      "piebox/operations": ["../../src/operations/index.ts"]
     }
   },
   "include": ["src/**/*"],

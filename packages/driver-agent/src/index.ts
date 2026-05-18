@@ -50,3 +50,21 @@ export type { GeminiClientConfig } from "./adapters/inbrowser-agent.js";
 
 // ─── Step 5 — server path (session/skills surface, pi-coding-agent adapter) ───
 
+export { createSandboxedSession } from "./session.js";
+export type {
+  SandboxSessionOptions,
+  SandboxSessionResult,
+} from "./types.js";
+export { loadSkillsFromVFS } from "./skills.js";
+export type { LoadSkillsFromVFSOptions } from "./skills.js";
+export { createPiCodingAgentSession } from "./adapters/pi-coding-agent.js";
+export type {
+  AgentSession,
+  Skill,
+  ToolDefinition,
+  PiCodingAgentSessionInputs,
+} from "./adapters/pi-coding-agent.js";
+export { AuthStorage, ModelRegistry } from "./adapters/pi-coding-agent.js";
+// Re-export `createSyntheticSourceInfo` from the agent SDK for
+// consumers that build their own Skill objects.
+export { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";

@@ -4,30 +4,26 @@
  * Eliminates the need for agents to write helper scripts when they need
  * to check package versions, inspect dependencies, or audit outdated packages.
  *
- * Operates via fetch() against registry.npmjs.org. No node_modules required.
+ * Re-shaped in Step 5 of the composable-sandbox migration plan
+ * (`docs/investigations/G-migration.md`) as a Layer 2 `PieboxTool`,
+ * so it composes with `PieboxToolset` and any driver that consumes
+ * the Layer 2 surface (agent loop, MCP server, CLI). The pre-Step-5
+ * `createNpmInfoToolDefinition(opts)` (which returned a
+ * `@earendil-works/pi-coding-agent` `ToolDefinition`) is removed.
  */
 
-import { Type, type Static, type TSchema } from "typebox";
-import { defineTool } from "@earendil-works/pi-coding-agent";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { PieboxResult, PieboxTool } from "../layer2/index.js";
 
-// ─── Schema ──────────────────────────────────────────────────────────────────
+// ─── Input ───────────────────────────────────────────────────────────────────
 
-const npmInfoSchema = Type.Object({
-  action: Type.Union([
-    Type.Literal("info"),
-    Type.Literal("versions"),
-    Type.Literal("outdated"),
-  ], { description: "Action to perform" }),
-  package: Type.Optional(
-    Type.String({ description: "Package name (e.g. 'express', '@types/node'). Required for 'info' and 'versions'." })
-  ),
-  path: Type.Optional(
-    Type.String({ description: "Path to package.json. Required for 'outdated'. Defaults to 'package.json'." })
-  ),
-});
-
-type NpmInfoInput = Static<typeof npmInfoSchema>;
+export interface NpmInfoArgs {
+  /** What to do. */
+  action: "info" | "versions" | "outdated";
+  /** Package name (e.g. 'express', '@types/node'). Required for 'info' and 'versions'. */
+  package?: string;
+  /** Path to package.json. Required for 'outdated'. Defaults to 'package.json'. */
+  path?: string;
+}
 
 // ─── Registry helpers ────────────────────────────────────────────────────────
 
@@ -201,62 +197,85 @@ async function handleOutdated(
   return lines.join("\n");
 }
 
-// ─── Tool Definition ─────────────────────────────────────────────────────────
+// ─── PieboxTool ──────────────────────────────────────────────────────────────
 
-export interface NpmInfoToolOptions {
-  /** Read a file from the sandbox VFS. Used by the 'outdated' action. */
-  readFile: (path: string) => string;
-}
+const DESCRIPTION = [
+  "Query npm registry metadata. Three actions:",
+  "",
+  "- info: Get latest version, description, license, deps for a package.",
+  "- versions: List all published versions of a package.",
+  "- outdated: Read package.json and check all deps against latest. Reports breaking changes.",
+].join("\n");
 
-export function createNpmInfoToolDefinition(
-  options: NpmInfoToolOptions,
-): ToolDefinition {
-  return defineTool({
-    name: "npm_info",
-    label: "npm info",
-    description: [
-      "Query npm registry metadata. Three actions:",
-      "",
-      "- info: Get latest version, description, license, deps for a package.",
-      "- versions: List all published versions of a package.",
-      "- outdated: Read package.json and check all deps against latest. Reports breaking changes.",
-    ].join("\n"),
-    promptSnippet:
-      "npm_info — Query npm registry. Check package versions, metadata, and find outdated dependencies.",
-    parameters: npmInfoSchema,
-    executionMode: "parallel",
-
-    async execute(_toolCallId, params: NpmInfoInput, _signal, _onUpdate, _ctx) {
-      const ok = (text: string) => ({
-        content: [{ type: "text" as const, text }],
-        isError: false,
-        details: undefined,
-      });
-      const err = (text: string) => ({
-        content: [{ type: "text" as const, text }],
-        isError: true,
-        details: undefined,
-      });
-
-      try {
-        switch (params.action) {
-          case "info": {
-            if (!params.package) return err("Error: 'package' is required for action 'info'.");
-            return ok(await handleInfo(params.package));
-          }
-          case "versions": {
-            if (!params.package) return err("Error: 'package' is required for action 'versions'.");
-            return ok(await handleVersions(params.package));
-          }
-          case "outdated": {
-            return ok(await handleOutdated(options.readFile, params.path ?? "package.json"));
-          }
-          default:
-            return err(`Unknown action: ${(params as any).action}. Use 'info', 'versions', or 'outdated'.`);
-        }
-      } catch (e) {
-        return err(`Error: ${e instanceof Error ? e.message : String(e)}`);
-      }
+/**
+ * The npm-info `PieboxTool`. Reads `package.json` for the `outdated`
+ * action via the supplied sandbox's filesystem. Network calls go to
+ * `registry.npmjs.org` and rely on the runtime's `fetch` permissions
+ * being open for that origin.
+ */
+export const npmInfoTool: PieboxTool<NpmInfoArgs, { text: string }> = {
+  name: "npm_info",
+  description: DESCRIPTION,
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        enum: ["info", "versions", "outdated"],
+        description: "Action to perform",
+      },
+      package: {
+        type: "string",
+        description: "Package name. Required for 'info' and 'versions'.",
+      },
+      path: {
+        type: "string",
+        description: "Path to package.json (relative to sandbox cwd). Defaults to 'package.json'.",
+      },
     },
-  }) as ToolDefinition;
-}
+    required: ["action"],
+  },
+  async execute(args, sandbox, signal): Promise<PieboxResult<{ text: string }>> {
+    if (signal.aborted) {
+      return { ok: false, summary: "cancelled" };
+    }
+    const cwd = sandbox.cwd.endsWith("/") ? sandbox.cwd.slice(0, -1) : sandbox.cwd;
+    const readFile = (path: string): string => {
+      const resolved = path.startsWith("/") ? path : `${cwd}/${path}`;
+      const buf = sandbox.fs.readFileSync(resolved, "utf-8");
+      return typeof buf === "string" ? buf : Buffer.from(buf as unknown as Uint8Array).toString("utf-8");
+    };
+
+    try {
+      let text: string;
+      switch (args.action) {
+        case "info":
+          if (!args.package) {
+            return { ok: false, summary: "'package' is required for action 'info'." };
+          }
+          text = await handleInfo(args.package);
+          break;
+        case "versions":
+          if (!args.package) {
+            return { ok: false, summary: "'package' is required for action 'versions'." };
+          }
+          text = await handleVersions(args.package);
+          break;
+        case "outdated":
+          text = await handleOutdated(readFile, args.path ?? "package.json");
+          break;
+        default:
+          return {
+            ok: false,
+            summary: `Unknown action: ${String((args as { action?: unknown }).action)}.`,
+          };
+      }
+      return { ok: true, summary: `npm_info ${args.action}`, data: { text } };
+    } catch (e) {
+      return {
+        ok: false,
+        summary: `npm_info failed: ${e instanceof Error ? e.message : String(e)}`,
+      };
+    }
+  },
+};

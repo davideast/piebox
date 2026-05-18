@@ -1,81 +1,83 @@
 /**
- * Tool wiring — creates all SDK tool definitions.
+ * createSandboxedTools — produce a Layer 2 `PieboxToolset` over a
+ * VFS + bash pair.
  *
- * @platformatic/vfs is the filesystem foundation. just-bash gets an
- * IFileSystem adapter over the VFS. Pi SDK tools use the VFS directly.
+ * Step 5 of the composable-sandbox migration plan
+ * (`docs/investigations/G-migration.md`) re-typed this function: it
+ * now returns `PieboxToolset` (the protocol-neutral Layer 2 shape)
+ * rather than the agent SDK's `ToolDefinition[]`. The implementation
+ * builds a Layer 2 `Sandbox` over the supplied substrate and
+ * delegates to `createStandardToolset`.
+ *
+ * Breaking change: callers that previously fed the result into
+ * `customTools` of an agent SDK session must now route through
+ * `@piebox/driver-agent`'s `createSandboxedSession` (which builds
+ * the SDK tools internally) or write their own
+ * `PieboxTool → ToolDefinition` adapter.
  */
 
 import type { PieboxFS as VirtualFileSystem } from "./fs/types.js";
 import type { Bash } from "just-bash";
 import {
-  createBashToolDefinition,
-  createReadToolDefinition,
-  createWriteToolDefinition,
-  createEditToolDefinition,
-  createGrepToolDefinition,
-  createFindToolDefinition,
-  createLsToolDefinition,
-} from "@earendil-works/pi-coding-agent";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import {
-  createBashOperations,
-  createReadOperations,
-  createWriteOperations,
-  createEditOperations,
-  createGrepOperations,
-  createFindOperations,
-  createLsOperations,
-} from "./operations/index.js";
-import { createNpmInfoToolDefinition } from "./tools/npm-info.js";
+  createSandbox,
+  createStandardToolset,
+  NODE_CAPABILITIES,
+  type PieboxToolset,
+} from "./layer2/index.js";
+import type { PieboxRunOptions, PieboxRunResult, PieboxRuntime } from "./runtime/types.js";
 
 export interface SandboxedToolsOptions {
-  /** When true, include the npm-info tool (requires network access). */
+  /**
+   * Reserved for future per-toolset configuration. Today the standard
+   * toolset is fully determined by the sandbox; this options bag stays
+   * so the API doesn't break when configuration lands.
+   */
   npmInfo?: boolean;
 }
 
 /**
- * Create all SDK tool definitions.
- *
- * - Bash tool → delegates to `Bash.exec()` (just-bash interpreter)
- * - File tools → delegate directly to `VirtualFileSystem` (node:fs API)
- * - npm-info → queries npm registry via fetch() (when network is enabled)
- *
- * Both operate on the same underlying filesystem because the Bash
- * instance is configured with an IFileSystem adapter over the VFS.
+ * Build a `PieboxRuntime` that dispatches commands through a just-bash
+ * interpreter, so the Layer 2 Sandbox can model the substrate uniformly.
+ */
+function bashRuntime(bash: Bash, defaultCwd: string): PieboxRuntime {
+  return {
+    async run(cmd: string, options?: PieboxRunOptions): Promise<PieboxRunResult> {
+      const r = await bash.exec(cmd, {
+        cwd: options?.cwd ?? defaultCwd,
+        signal: options?.signal,
+      });
+      if (options?.onStdout && r.stdout) options.onStdout(r.stdout);
+      if (options?.onStderr && r.stderr) options.onStderr(r.stderr);
+      return {
+        stdout: r.stdout,
+        stderr: r.stderr,
+        exitCode: r.exitCode,
+      };
+    },
+  };
+}
+
+/**
+ * Build the standard piebox toolset (read, write, edit, ls, grep,
+ * find, bash) bound to the supplied VFS + bash pair.
  *
  * @param cwd - Virtual working directory for all tools
- * @param vfs - @platformatic/vfs VirtualFileSystem (the foundation)
+ * @param vfs - PieboxFS instance (the filesystem foundation)
  * @param bash - just-bash Bash instance (configured with VFS adapter)
- * @param options - Optional tool configuration
- * @returns Array of ToolDefinitions ready for `customTools`
+ * @param _options - Reserved for future toolset configuration
+ * @returns A `PieboxToolset` drivers can adapt to their protocol of choice
  */
 export function createSandboxedTools(
   cwd: string,
   vfs: VirtualFileSystem,
   bash: Bash,
-  options?: SandboxedToolsOptions,
-): ToolDefinition[] {
-  const tools = [
-    createBashToolDefinition(cwd, { operations: createBashOperations(bash) }),
-    createReadToolDefinition(cwd, { operations: createReadOperations(vfs) }),
-    createWriteToolDefinition(cwd, { operations: createWriteOperations(vfs) }),
-    createEditToolDefinition(cwd, { operations: createEditOperations(vfs) }),
-    createGrepToolDefinition(cwd, { operations: createGrepOperations(vfs) }),
-    createFindToolDefinition(cwd, { operations: createFindOperations(vfs) }),
-    createLsToolDefinition(cwd, { operations: createLsOperations(vfs) }),
-  ] as ToolDefinition[];
-
-  if (options?.npmInfo) {
-    tools.push(
-      createNpmInfoToolDefinition({
-        readFile: (path) => {
-          const resolved = path.startsWith("/") ? path : `${cwd}/${path}`;
-          return vfs.readFileSync(resolved, "utf-8") as string;
-        },
-      }),
-    );
-  }
-
-  return tools as ToolDefinition[];
+  _options?: SandboxedToolsOptions,
+): PieboxToolset {
+  const sandbox = createSandbox({
+    fs: vfs,
+    runtime: bashRuntime(bash, cwd),
+    capabilities: NODE_CAPABILITIES,
+    cwd,
+  });
+  return createStandardToolset(sandbox);
 }
-
