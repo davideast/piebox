@@ -11,7 +11,7 @@ import type { ICommitService } from "../commit/handler.js";
 import type { IExportService } from "../export/spec.js";
 import { sessionId } from "../../utils/session-id.js";
 import { getModel } from "@earendil-works/pi-ai";
-import { createSandboxedSession } from "@piebox/driver-agent";
+import { createSandboxedSession } from "@piebox/driver-agent/server";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { appendFile } from "node:fs";

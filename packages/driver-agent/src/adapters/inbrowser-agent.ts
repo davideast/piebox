@@ -73,6 +73,9 @@ export function adaptInbrowserAgentClient(
               id: ev.id,
               name: ev.name,
               args: (ev.args ?? {}) as Record<string, unknown>,
+              ...((ev as { signature?: string }).signature !== undefined
+                ? { signature: (ev as { signature: string }).signature }
+                : {}),
             };
             break;
           case "turn_complete":
@@ -177,6 +180,12 @@ export function createGeminiLlmClient(cfg: GeminiClientConfig): LlmClient {
               id: ev.callId,
               name: ev.name,
               args: (ev.args ?? {}) as Record<string, unknown>,
+              // Gemini's thoughtSignature, carried through so the
+              // driver can replay it on the next turn (otherwise
+              // Gemini 400s on the second function-call round).
+              ...(ev.signature !== undefined
+                ? { signature: ev.signature }
+                : {}),
             };
             break;
           case "usage":

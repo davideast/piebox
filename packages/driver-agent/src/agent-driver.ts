@@ -116,6 +116,10 @@ export function createAgentDriver(opts: AgentDriverOptions): AgentDriver {
         id: string;
         name: string;
         args: Record<string, unknown>;
+        /** Provider round-trip token (Gemini thoughtSignature). Must
+         *  flow through to history so the next iteration can replay
+         *  it. */
+        signature?: string;
       }> = [];
       let assistantText = "";
 
@@ -134,6 +138,9 @@ export function createAgentDriver(opts: AgentDriverOptions): AgentDriver {
                 id: chunk.id,
                 name: chunk.name,
                 args: chunk.args,
+                ...(chunk.signature !== undefined
+                  ? { signature: chunk.signature }
+                  : {}),
               });
               break;
             case "turn_complete":
@@ -167,6 +174,7 @@ export function createAgentDriver(opts: AgentDriverOptions): AgentDriver {
           id: c.id,
           name: c.name,
           argsJson: safeJsonStringify(c.args),
+          ...(c.signature !== undefined ? { signature: c.signature } : {}),
         })),
       };
       history.push(assistantMsg);
@@ -222,6 +230,10 @@ export function createAgentDriver(opts: AgentDriverOptions): AgentDriver {
             ? { exitCode: result.exitCode }
             : {}),
         });
+        // Preserve `signature` while patching in `resultJson` — the
+        // signature was set when the toolCalls array was first built
+        // and must survive subsequent map() passes so Gemini can
+        // replay it on the next turn.
         assistantMsg.toolCalls = assistantMsg.toolCalls?.map((tc) =>
           tc.id === call.id ? { ...tc, resultJson } : tc,
         );

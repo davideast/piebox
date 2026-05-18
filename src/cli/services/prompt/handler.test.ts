@@ -9,7 +9,7 @@ vi.mock("../../utils/model-resolver.js", () => ({
 
 const sessionMock = { prompt: vi.fn().mockResolvedValue(undefined) };
 const createSandboxedSessionMock = vi.fn().mockResolvedValue({ session: sessionMock });
-vi.mock("@piebox/driver-agent", () => ({
+vi.mock("@piebox/driver-agent/server", () => ({
   createSandboxedSession: (...args: unknown[]) => createSandboxedSessionMock(...args),
 }));
 

@@ -39,6 +39,11 @@ export default defineConfig({
       // browser, that's the cue to split tarball.ts behind a dynamic
       // import (Step-5-shaped follow-up).
       "piebox/layer2": path.resolve(here, "../../src/layer2/index.ts"),
+      // The driver-agent's pi-coding-agent adapter pulls `piebox/operations`
+      // for the operation type aliases. Vite needs this alias too —
+      // node_modules/piebox is the previously-published npm version that
+      // predates the operations sub-entry.
+      "piebox/operations": path.resolve(here, "../../src/operations/index.ts"),
       // @piebox/driver-agent is a workspace package; resolve it to source
       // so the playground build picks up local edits without a rebuild step.
       "@piebox/driver-agent": path.resolve(here, "../../packages/driver-agent/src/index.ts"),
