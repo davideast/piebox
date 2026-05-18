@@ -29,6 +29,19 @@ export default defineConfig({
   resolve: {
     alias: {
       "piebox/browser": path.resolve(here, "../../src/browser.ts"),
+      // Layer 2 surface (Sandbox primitive + PieboxTool + capabilities).
+      // The driver-agent package and the playground both consume this.
+      // `piebox/layer2`'s tarball.ts pulls `node:zlib`, but the playground
+      // only references the tool/capabilities/sandbox-types surfaces; the
+      // zlib reference is reachable only via `Sandbox.toTarball`, which
+      // the playground doesn't call — so it doesn't show up in the browser
+      // bundle in practice. If a future feature touches toTarball from the
+      // browser, that's the cue to split tarball.ts behind a dynamic
+      // import (Step-5-shaped follow-up).
+      "piebox/layer2": path.resolve(here, "../../src/layer2/index.ts"),
+      // @piebox/driver-agent is a workspace package; resolve it to source
+      // so the playground build picks up local edits without a rebuild step.
+      "@piebox/driver-agent": path.resolve(here, "../../packages/driver-agent/src/index.ts"),
       "@pyric/ui/agents": path.resolve(here, "vendor/pyric-ui/agents/index.ts"),
       "@pyric/ui/primitives": path.resolve(here, "vendor/pyric-ui/primitives/index.ts"),
       // Fork override — runtime entry only. Must come last so it wins over

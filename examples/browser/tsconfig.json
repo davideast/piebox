@@ -13,6 +13,8 @@
     "jsx": "react-jsx",
     "paths": {
       "piebox/browser": ["../../src/browser.ts"],
+      "piebox/layer2": ["../../src/layer2/index.ts"],
+      "@piebox/driver-agent": ["../../packages/driver-agent/src/index.ts"],
       "@pyric/ui/agents": ["./vendor/pyric-ui/agents/index.ts"],
       "@pyric/ui/primitives": ["./vendor/pyric-ui/primitives/index.ts"]
     }

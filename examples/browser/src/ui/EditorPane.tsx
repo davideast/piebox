@@ -453,7 +453,7 @@ function FileViewer({ path, revision, treeOpen, onShowTree }: FileViewerProps) {
     const { fs } = getRuntime();
     try {
       const raw = fs.readFileSync(path);
-      const bytes = (raw as Uint8Array).byteLength ?? (raw as string).length ?? 0;
+      const bytes = (raw as Uint8Array).byteLength ?? (raw as unknown as string).length ?? 0;
       const binary = raw instanceof Uint8Array ? hasNulByte(raw) : false;
       if (binary) {
         setContent('');

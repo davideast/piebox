@@ -21,6 +21,32 @@
 
 // ─── Step 4 — browser path (createAgentDriver, AgentEvent, inbrowser-agent adapter) ───
 
+export { createAgentDriver } from "./agent-driver.js";
+export type { AgentDriver, AgentDriverOptions } from "./agent-driver.js";
+
+export type {
+  AgentEvent,
+  AgentChatMessage,
+  AgentToolArgs,
+  AgentUsage,
+} from "./events.js";
+
+export type {
+  LlmClient,
+  LlmRequest,
+  LlmResponse,
+  ChatChunk,
+  ChatRequest,
+  ChatToolSpec,
+} from "./llm-client.js";
+
+export { defaultSystemPromptBuilder } from "./system-prompt.js";
+
+export {
+  adaptInbrowserAgentClient,
+  createGeminiLlmClient,
+} from "./adapters/inbrowser-agent.js";
+export type { GeminiClientConfig } from "./adapters/inbrowser-agent.js";
+
 // ─── Step 5 — server path (session/skills surface, pi-coding-agent adapter) ───
 
-export {};

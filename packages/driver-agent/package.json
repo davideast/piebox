@@ -21,7 +21,11 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "piebox": "workspace:*"
+    "piebox": "*"
+  },
+  "dependencies": {
+    "@inbrowser/agent": "^0.1.0",
+    "@inbrowser/relay": "^0.1.0"
   },
   "engines": {
     "node": ">=22"

@@ -1,23 +1,24 @@
-// Drives one agent submission per send(). Subscribes to the SessionEvent
-// stream from @inbrowser/agent and mirrors its data into the chat + terminal
-// stores so the React UI can render reactively.
+// Drives one agent submission per send(). Subscribes to the AgentEvent
+// stream from @piebox/driver-agent and mirrors its data into the chat +
+// terminal stores so the React UI can render reactively.
 //
-// Multi-turn handling: the SDK's session only carries assistant *text*
-// across submits — it drops tool calls and tool results when it appends
-// the assistant message to its internal history. To give the model a
-// complete transcript on turn N+1 (including what it wrote, ran, and
-// observed), we keep history in useChatStore and rebuild a fresh
-// AgentSession on every send with the full accumulated history threaded
-// in. Cheap — session construction is just object wiring.
+// Multi-turn handling: pre-Step-4 the SDK's session dropped tool calls
+// and tool results when it appended assistant messages to its internal
+// history, so this hook had to rebuild a fresh session per submit and
+// re-thread the prior turns. @piebox/driver-agent now owns history
+// internally — the driver keeps the user/assistant/tool messages
+// (including each turn's toolCalls + result JSON) so subsequent submits
+// see the model's prior activity automatically. The driver handle is
+// memoized per (apiKey, modelId) so the history actually persists.
 //
 // Tool calls' stdout/stderr (bash) AND read/ls payloads stream into the
 // Terminal tab so users can watch what's happening in the sandbox. The
 // chat store keeps the structured per-tool record for the Activity tab.
-import { useCallback, useMemo } from 'react';
-import type { ChatMessage as SdkChatMessage, SessionEvent } from '@inbrowser/agent';
-import { buildAgent } from '../agent.js';
+import { useCallback, useMemo, useRef } from 'react';
+import type { AgentEvent } from '@piebox/driver-agent';
+import { buildAgent, type AgentHandle } from '../agent.js';
 import { useApiKeyStore } from '../store/apiKey.js';
-import { useChatStore, type ChatMessage, type ToolCall } from '../store/chat.js';
+import { useChatStore, type ToolCall } from '../store/chat.js';
 import { useModelStore } from '../store/model.js';
 import { useSessionStore } from '../store/session.js';
 import { termLog } from '../store/terminal.js';
@@ -30,14 +31,22 @@ interface UseAgentLoopReturn {
   stop(): void;
 }
 
-// Module-scoped so stop() can reach into the in-flight session/abort
-// without React re-render gymnastics.
+// Module-scoped so stop() can reach into the in-flight abort without
+// React re-render gymnastics.
 let currentAbort: AbortController | null = null;
-let currentCancel: (() => void) | null = null;
 
 export function useAgentLoop(): UseAgentLoopReturn {
   const apiKey = useApiKeyStore((s) => s.key);
   const modelId = useModelStore((s) => s.modelId);
+
+  // Cache the driver handle across submits so its internal history
+  // persists. Rebuilt only when (apiKey, modelId) changes — different
+  // keys/models mean a different agent identity.
+  const handleRef = useRef<{
+    key: string;
+    modelId: string;
+    handle: AgentHandle;
+  } | null>(null);
 
   const send = useCallback(
     async (prompt: string) => {
@@ -57,12 +66,14 @@ export function useAgentLoop(): UseAgentLoopReturn {
         /* /work already there */
       }
 
-      // Snapshot history BEFORE the new user message hits the chat store.
-      // The SDK's session.submit() appends the user prompt to its own
-      // history internally, so we must NOT include it here or it would
-      // duplicate.
-      const prior = useChatStore.getState().messages;
-      const history = toSdkHistory(prior);
+      const cached = handleRef.current;
+      let handle: AgentHandle;
+      if (cached && cached.key === apiKey && cached.modelId === modelId) {
+        handle = cached.handle;
+      } else {
+        handle = buildAgent({ fs, runtime, cwd: CWD, apiKey, modelId });
+        handleRef.current = { key: apiKey, modelId, handle };
+      }
 
       const chat = useChatStore.getState();
       const sess = useSessionStore.getState();
@@ -74,12 +85,8 @@ export function useAgentLoop(): UseAgentLoopReturn {
         createdAt: Date.now(),
       });
 
-      const handle = buildAgent({ fs, runtime, cwd: CWD, apiKey, modelId, history });
-      const session = handle.session;
-
       const ac = new AbortController();
       currentAbort = ac;
-      currentCancel = () => session.cancel();
       sess.setError(null);
       sess.setSending(true);
       // Start in `llm` phase so the Stop button (LLM-only) is visible
@@ -100,7 +107,7 @@ export function useAgentLoop(): UseAgentLoopReturn {
       };
 
       try {
-        for await (const ev of session.submit(trimmed, ac.signal) as AsyncIterable<SessionEvent>) {
+        for await (const ev of handle.driver.submit(trimmed, ac.signal)) {
           handleEvent(ev, ensureAssistant);
         }
       } catch (e) {
@@ -111,7 +118,6 @@ export function useAgentLoop(): UseAgentLoopReturn {
         useSessionStore.getState().setSending(false);
         useSessionStore.getState().setPhase('idle');
         if (currentAbort === ac) currentAbort = null;
-        currentCancel = null;
       }
     },
     [apiKey, modelId],
@@ -119,79 +125,12 @@ export function useAgentLoop(): UseAgentLoopReturn {
 
   const stop = useCallback(() => {
     currentAbort?.abort();
-    currentCancel?.();
   }, []);
 
   return useMemo(() => ({ send, stop }), [send, stop]);
 }
 
-/** Convert our React chat store into the SDK's ChatMessage shape.
- *  Crucial: assistant messages must carry `toolCalls` (with argsJson +
- *  resultJson) so the LLM sees its own past tool activity. Without this
- *  the SDK's history only carries plain text and the model can't recall
- *  what it created/ran in earlier turns.
- *
- *  Exported so Playwright probes (scripts/probe-*.mjs) can validate the
- *  conversion without booting an LLM call. */
-export function toSdkHistory(messages: readonly ChatMessage[]): SdkChatMessage[] {
-  return messages
-    .filter((m) => m.role !== 'system')
-    .map((m): SdkChatMessage => {
-      if (m.role === 'user') {
-        return {
-          id: m.id,
-          role: 'user',
-          text: m.text,
-          timestamp: m.createdAt,
-        };
-      }
-      return {
-        id: m.id,
-        role: 'assistant',
-        text: m.text,
-        timestamp: m.createdAt,
-        ...(m.toolCalls && m.toolCalls.length > 0
-          ? { toolCalls: m.toolCalls.map(toSdkToolCall) }
-          : {}),
-      };
-    });
-}
-
-function toSdkToolCall(call: ToolCall): SdkChatMessage['toolCalls'] extends Array<infer T> | undefined ? T : never {
-  // Serialize args/result to JSON for the SDK shape. Tool results that
-  // failed to serialize (cyclic refs, etc.) fall back to a stub so the
-  // model still sees that a call happened, just without payload.
-  let argsJson: string;
-  try {
-    argsJson = JSON.stringify(call.args ?? {});
-  } catch {
-    argsJson = '{}';
-  }
-  let resultJson: string | undefined;
-  if (call.result !== undefined) {
-    try {
-      resultJson = JSON.stringify({
-        ok: call.status !== 'failed',
-        summary: call.summary,
-        data: call.result,
-      });
-    } catch {
-      resultJson = JSON.stringify({ ok: call.status !== 'failed', summary: call.summary });
-    }
-  } else if (call.summary !== undefined) {
-    resultJson = JSON.stringify({ ok: call.status !== 'failed', summary: call.summary });
-  }
-  return {
-    id: call.id,
-    name: call.name,
-    argsJson,
-    ...(resultJson !== undefined ? { resultJson } : {}),
-    ok: call.status === 'ok',
-    ...(call.summary !== undefined ? { summary: call.summary } : {}),
-  } as never;
-}
-
-function handleEvent(ev: SessionEvent, ensureAssistant: () => string): void {
+function handleEvent(ev: AgentEvent, ensureAssistant: () => string): void {
   const chat = useChatStore.getState();
   switch (ev.kind) {
     case 'turn_started':
@@ -265,8 +204,8 @@ function handleEvent(ev: SessionEvent, ensureAssistant: () => string): void {
     }
     case 'turn_completed': {
       const id = ensureAssistant();
-      const inTokens = ev.metrics.tokensIn ?? 0;
-      const outTokens = ev.metrics.tokensOut ?? 0;
+      const inTokens = ev.usage?.tokensIn ?? 0;
+      const outTokens = ev.usage?.tokensOut ?? 0;
       chat.setMetrics(id, { tokensIn: inTokens, tokensOut: outTokens });
       useSessionStore.getState().bumpTurn(inTokens + outTokens);
       break;
