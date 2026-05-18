@@ -1,15 +1,19 @@
 # Piebox boundary check.
 #
-# Runs `bash scripts/boundary-test.sh` on every push and PR to surface
-# whether the Layer 2 boundary is improving (or regressing) across
-# changes. Today the check runs in REPORT-ONLY mode — a non-zero exit
-# does NOT fail the build, because the baseline (see
-# `scripts/boundary-baseline.json`) is currently 21 violations and we
-# need a few migration steps to drain that.
+# Runs `bash scripts/boundary-test.sh` on every push and PR. The
+# script asserts that designated "core" paths do not import from
+# packages that should live behind driver adapters.
 #
-# The gate flips to failing in Step 6 of the migration plan, once
-# the count is expected to be 0 and any new violation is a real
-# regression. See docs/investigations/G-migration.md.
+# Step 6 of the composable-sandbox migration plan FLIPPED this from
+# report-only mode to a hard FAIL on any non-zero exit. Steps 1–5
+# drained the original 21 baseline violations to zero across the
+# multi-path matrix; from here, any new import that crosses a
+# boundary is a real regression that should block the PR.
+#
+# To intentionally introduce a new banned package (e.g. add a new
+# SDK to one of the driver packages), update the BANNED array in
+# `scripts/boundary-test.sh` and adjust the matrix as needed.
+# Document the rationale in the PR description.
 name: Boundary check
 
 on:
@@ -20,28 +24,10 @@ on:
 
 jobs:
   boundary:
-    name: piebox/src boundary
+    name: piebox boundary
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run boundary-test.sh (report-only)
-        id: boundary
-        continue-on-error: true
+      - name: Run boundary-test.sh
         run: bash scripts/boundary-test.sh
-
-      - name: Report violation delta vs baseline
-        if: always()
-        run: |
-          set -euo pipefail
-          baseline=$(jq -r '.total_violations' scripts/boundary-baseline.json)
-          actual=$(bash scripts/boundary-test.sh 2>&1 | grep -oE 'Found [0-9]+ boundary' | grep -oE '[0-9]+' | head -1 || echo 0)
-          echo "Baseline (frozen at scripts/boundary-baseline.json): $baseline"
-          echo "Current branch:                                       $actual"
-          if [ "$actual" -lt "$baseline" ]; then
-            echo "::notice title=Boundary improving::violations dropped from $baseline to $actual"
-          elif [ "$actual" -eq "$baseline" ]; then
-            echo "::notice title=Boundary unchanged::still at $actual violations"
-          else
-            echo "::warning title=Boundary regressing::violations went from $baseline to $actual"
-          fi

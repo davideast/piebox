@@ -33,6 +33,7 @@
     "baseUrl": ".",
     "paths": {
       "@piebox/driver-agent": ["./packages/driver-agent/src/index.ts"],
+      "@piebox/driver-mcp": ["./packages/driver-mcp/src/index.ts"],
       "piebox": ["./src/index.ts"],
       "piebox/layer2": ["./src/layer2/index.ts"],
       "piebox/operations": ["./src/operations/index.ts"]
