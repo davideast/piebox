@@ -1,38 +1,49 @@
 /**
  * In-browser agent session, built on:
- *   • @inbrowser/agent       — the agent loop (browser-safe by design)
- *   • @inbrowser/relay       — Gemini SSE provider (called directly, no relay server)
- *   • piebox/browser         — PieboxFS + PieboxRuntime
+ *   • @piebox/driver-agent    — the agent loop driver (ReAct over Layer 2)
+ *   • @inbrowser/relay        — Gemini SSE provider (via the driver's
+ *                               inbrowser-agent adapter; called directly,
+ *                               no relay server)
+ *   • piebox/browser          — PieboxFS + PieboxRuntime
+ *   • piebox/layer2           — Sandbox + PieboxTool + capabilities
  *
- * The LlmClient adapts @inbrowser/relay's `buildGeminiRequest` +
- * `geminiEventsFromResponse` into @inbrowser/agent's ChatEvent stream. Tool
- * handlers wire to PieboxFS / PieboxRuntime so `write`, `read`, `bash`,
- * etc. operate on the almostnode-backed virtual filesystem.
+ * Pre-Step-4 this file owned both the agent-loop wiring (via
+ * `@inbrowser/agent`'s `createAgentSession`) and the 11 ToolHandler
+ * definitions. The wiring half now lives in `@piebox/driver-agent`;
+ * what remains here is:
+ *
+ *   • A minimal `Sandbox` factory that wraps the playground's PieboxFS
+ *     + PieboxRuntime + `BROWSER_CAPABILITIES`. We don't go through
+ *     `createSandbox` from `piebox/layer2` because that pulls
+ *     `node:zlib` (via the tarball implementation) which we don't need
+ *     in the browser. A future browser entry surface will expose this
+ *     factory; until then the playground keeps it inline.
+ *
+ *   • 11 PieboxTool definitions (write/read/edit/bash/ls + 7 git tools)
+ *     using the Layer 2 `(args, sandbox, signal) => PieboxResult` shape.
+ *
+ *   • The playground-specific system-prompt addendum (almostnode quirks
+ *     — npm devDeps backstop, node -e translation, no `npx`, etc.). The
+ *     driver's `defaultSystemPromptBuilder` writes the generic
+ *     capability-templated part; this file appends the substrate notes.
  */
 
 import {
-  createAgentSession,
-  createReactLoopStrategy,
-  createToolRegistry,
-  createDispatch,
-  createMetricsCollector,
-  EMPTY_WORKSPACE,
-  EMPTY_RUNTIME,
-  type AgentSession,
-  type ChatEvent,
-  type ChatMessage as SdkChatMessage,
-  type LlmClient,
-  type LlmConfig,
-  type ToolHandler,
-  type ToolContext,
-  type ToolResult,
-  type JsonSchema,
-  type Tracer,
-} from "@inbrowser/agent";
+  createAgentDriver,
+  createGeminiLlmClient,
+  defaultSystemPromptBuilder,
+  type AgentDriver,
+  type AgentEvent,
+} from "@piebox/driver-agent";
 import {
-  buildGeminiRequest,
-  geminiEventsFromResponse,
-} from "@inbrowser/relay/providers/gemini";
+  createToolset,
+  BROWSER_CAPABILITIES,
+  type PieboxResult,
+  type PieboxTool,
+  type PieboxToolset,
+  type RuntimeCapabilities,
+  type Sandbox,
+} from "piebox/layer2";
 import type { PieboxFS, PieboxRuntime } from "piebox/browser";
 import { runInSandbox } from "./runtime/translators.js";
 import {
@@ -59,101 +70,72 @@ export function clearApiKey(): void {
   try { localStorage.removeItem(KEY_STORAGE); } catch { /* no-op */ }
 }
 
-// ── Gemini LlmClient via @inbrowser/relay ─────────────────────────────────
+// ── AgentEvent re-export (for useAgentLoop's switch) ──────────────────────
 
-function createGeminiClient(cfg: LlmConfig): LlmClient {
+export type { AgentEvent };
+
+// ── Browser-flavored Sandbox factory ──────────────────────────────────────
+// Wraps PieboxFS + PieboxRuntime in the Layer 2 Sandbox shape. We hand-roll
+// the literal instead of calling `createSandbox` from `piebox/layer2`
+// because that path drags in `node:zlib` via tarball.ts. The playground
+// never calls toTarball/toGitPack/applyPatch from the browser; those
+// methods throw "not implemented" here so a stray call is loud.
+
+interface BrowserSandboxInit {
+  fs: PieboxFS;
+  runtime: PieboxRuntime;
+  cwd: string;
+  capabilities?: RuntimeCapabilities;
+  id?: string;
+}
+
+let sandboxCounter = 0;
+
+function createBrowserSandbox(init: BrowserSandboxInit): Sandbox {
+  const id = init.id ?? `sb-browser-${++sandboxCounter}-${Date.now().toString(36)}`;
+  const capabilities = init.capabilities ?? BROWSER_CAPABILITIES;
+  const handlers = new Set<() => void>();
+  let destroyed = false;
+
   return {
-    id: `gemini:${cfg.model}`,
-    supportsTools: true,
-    async *chat(req, signal) {
-      // Translate @inbrowser/agent's NormalizedMessage → relay's
-      // LegacyChatMessage. Same role + text shape, plus optional toolCalls
-      // on assistant messages and toolCallId on tool messages.
-      const messages = req.messages.map((m) => ({
-        role: m.role,
-        text: m.text ?? "",
-        toolCalls: m.toolCalls,
-        toolCallId: (m as any).toolCallId,
-        toolName: (m as any).toolName,
-      })) as any;
-
-      const request = buildGeminiRequest({
-        provider: "gemini",
-        model: cfg.model,
-        messages,
-        tools: req.tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters as any,
-        })),
-        apiKey: cfg.apiKey ?? "",
-        signal,
-      });
-
-      let response: Response;
-      try {
-        response = await fetch(request);
-      } catch (e) {
-        yield { kind: "error", message: e instanceof Error ? e.message : String(e) };
-        return;
+    id,
+    fs: init.fs,
+    runtime: init.runtime,
+    cwd: init.cwd,
+    capabilities,
+    async toTarball() {
+      throw new Error("Sandbox.toTarball is not available in the browser playground.");
+    },
+    async toGitPack() {
+      throw new Error("Sandbox.toGitPack is not implemented.");
+    },
+    async applyPatch() {
+      throw new Error("Sandbox.applyPatch is not implemented.");
+    },
+    on(event, handler) {
+      if (event !== "destroyed") return { dispose: () => undefined };
+      handlers.add(handler);
+      return { dispose: () => { handlers.delete(handler); } };
+    },
+    destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      const snapshot = Array.from(handlers);
+      handlers.clear();
+      for (const h of snapshot) {
+        try { h(); } catch { /* swallow */ }
       }
-      if (!response.ok) {
-        const body = await response.text().catch(() => "");
-        yield {
-          kind: "error",
-          message: `gemini ${response.status}: ${body.slice(0, 400)}`,
-        };
-        return;
-      }
-
-      let prompt = 0;
-      let output = 0;
-      let cached = 0;
-
-      for await (const ev of geminiEventsFromResponse(response, signal)) {
-        switch (ev.kind) {
-          case "text":
-            yield { kind: "text", chunk: ev.chunk };
-            break;
-          case "thinking":
-            yield { kind: "thinking", chunk: ev.chunk };
-            break;
-          case "tool_call":
-            yield {
-              kind: "tool_call",
-              id: ev.callId,
-              name: ev.name,
-              args: ev.args,
-              signature: ev.signature,
-            };
-            break;
-          case "usage":
-            prompt = ev.promptTokens;
-            output = ev.outputTokens;
-            cached = ev.cachedTokens ?? 0;
-            break;
-          case "error":
-            yield { kind: "error", message: ev.message };
-            break;
-        }
-      }
-
-      yield {
-        kind: "turn_complete",
-        usage: {
-          promptTokens: prompt,
-          completionTokens: output,
-          cachedTokens: cached,
-        },
-        details: { requestedModel: cfg.model },
-      };
     },
   };
 }
 
-// ── Tool handlers backed by PieboxFS + PieboxRuntime ──────────────────────
-
-interface ToolDeps { fs: PieboxFS; runtime: PieboxRuntime; cwd: string }
+// ── PieboxTool definitions ────────────────────────────────────────────────
+// Eleven tools: write/read/edit/bash/ls plus 7 git_* tools. All use the
+// Layer 2 `(args, sandbox, signal) => PieboxResult` shape. `bash` also
+// implements `executeStreaming` so the Shell tab can subscribe to live
+// chunks; the agent driver currently uses the buffered `execute` path
+// (live stdout forwarding into AgentEvent is a Layer 2 gap — C.1 §"gaps"
+// #1).
 
 function resolvePath(cwd: string, p: string): string {
   if (p.startsWith("/")) return p;
@@ -161,25 +143,19 @@ function resolvePath(cwd: string, p: string): string {
   return `${cwd}/${p}`;
 }
 
-function ok(summary: string, data?: unknown): ToolResult {
-  return { ok: true, summary, data };
-}
-function fail(summary: string, data?: unknown): ToolResult {
-  return { ok: false, summary, data };
+function ok<T>(summary: string, data?: T): PieboxResult<T> {
+  return data === undefined ? { ok: true, summary } : { ok: true, summary, data };
 }
 
-// Substrate translators (npm create, node -e, devDeps backstop,
-// [piebox hint] postprocessor, git argv shim) live in
-// ./runtime/translators.ts + ./runtime/git-shim.ts so the agent's bash
-// tool and the interactive Shell tab share one implementation.
+function fail<T = unknown>(summary: string, data?: T): PieboxResult<T> {
+  return data === undefined ? { ok: false, summary } : { ok: false, summary, data };
+}
 
-function buildTools(deps: ToolDeps): ToolHandler[] {
-  const { fs, runtime, cwd } = deps;
-
-  const writeTool: ToolHandler = {
+function buildBrowserTools(fs: PieboxFS, runtime: PieboxRuntime, cwd: string): readonly PieboxTool[] {
+  const writeTool: PieboxTool<{ path: string; content: string }> = {
     name: "write",
     description: "Create or overwrite a file with the given content. Use for new files.",
-    parameters: {
+    inputSchema: {
       type: "object",
       properties: {
         path: { type: "string", description: "Absolute or cwd-relative path." },
@@ -187,45 +163,43 @@ function buildTools(deps: ToolDeps): ToolHandler[] {
       },
       required: ["path", "content"],
     },
-    async execute(args, ctx) {
-      if (ctx.signal.aborted) return fail("cancelled");
-      const { path, content } = args as { path: string; content: string };
-      const resolved = resolvePath(cwd, path);
+    async execute(args, _sandbox, signal) {
+      if (signal.aborted) return fail("cancelled");
+      const resolved = resolvePath(cwd, args.path);
       const parent = resolved.split("/").slice(0, -1).join("/") || "/";
       try {
         fs.mkdirSync(parent, { recursive: true });
-        fs.writeFileSync(resolved, content);
-        return ok(`wrote ${resolved} (${content.length} bytes)`);
+        fs.writeFileSync(resolved, args.content);
+        return ok(`wrote ${resolved} (${args.content.length} bytes)`);
       } catch (e) {
         return fail(`write failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
   };
 
-  const readTool: ToolHandler = {
+  const readTool: PieboxTool<{ path: string }, { content: string }> = {
     name: "read",
     description: "Read a file's UTF-8 contents.",
-    parameters: {
+    inputSchema: {
       type: "object",
       properties: { path: { type: "string" } },
       required: ["path"],
     },
-    async execute(args, ctx) {
-      if (ctx.signal.aborted) return fail("cancelled");
-      const { path } = args as { path: string };
+    async execute(args, _sandbox, signal) {
+      if (signal.aborted) return fail("cancelled");
       try {
-        const text = fs.readFileSync(resolvePath(cwd, path), "utf-8") as string;
-        return ok(`read ${path} (${text.length} bytes)`, { content: text });
+        const text = fs.readFileSync(resolvePath(cwd, args.path), "utf-8") as string;
+        return ok(`read ${args.path} (${text.length} bytes)`, { content: text });
       } catch (e) {
         return fail(`read failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
   };
 
-  const editTool: ToolHandler = {
+  const editTool: PieboxTool<{ path: string; oldText: string; newText: string }> = {
     name: "edit",
     description: "Replace exactly `oldText` with `newText` in `path`. `oldText` must appear once.",
-    parameters: {
+    inputSchema: {
       type: "object",
       properties: {
         path: { type: "string" },
@@ -234,73 +208,103 @@ function buildTools(deps: ToolDeps): ToolHandler[] {
       },
       required: ["path", "oldText", "newText"],
     },
-    async execute(args, ctx) {
-      if (ctx.signal.aborted) return fail("cancelled");
-      const { path, oldText, newText } = args as { path: string; oldText: string; newText: string };
-      const resolved = resolvePath(cwd, path);
+    async execute(args, _sandbox, signal) {
+      if (signal.aborted) return fail("cancelled");
+      const resolved = resolvePath(cwd, args.path);
       try {
         const cur = fs.readFileSync(resolved, "utf-8") as string;
-        const idx = cur.indexOf(oldText);
-        if (idx < 0) return fail(`edit failed: oldText not found in ${path}`);
-        if (cur.indexOf(oldText, idx + oldText.length) >= 0) {
-          return fail(`edit failed: oldText appears more than once in ${path}`);
+        const idx = cur.indexOf(args.oldText);
+        if (idx < 0) return fail(`edit failed: oldText not found in ${args.path}`);
+        if (cur.indexOf(args.oldText, idx + args.oldText.length) >= 0) {
+          return fail(`edit failed: oldText appears more than once in ${args.path}`);
         }
-        const next = cur.slice(0, idx) + newText + cur.slice(idx + oldText.length);
+        const next = cur.slice(0, idx) + args.newText + cur.slice(idx + args.oldText.length);
         fs.writeFileSync(resolved, next);
-        return ok(`edited ${path}`);
+        return ok(`edited ${args.path}`);
       } catch (e) {
         return fail(`edit failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
   };
 
-  const bashTool: ToolHandler = {
+  // Bash tool — buffered `execute` (used by the agent driver today)
+  // plus `executeStreaming` (used when the Shell tab forwards live
+  // output). Both go through the shared `runInSandbox` translator
+  // pipeline so the agent and the user see identical [piebox] notice
+  // lines and translations.
+  const bashTool: PieboxTool<{ command: string; cwd?: string }, {
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+  }> = {
     name: "bash",
     description:
       "Run a shell command in the in-browser sandbox. `node` and `npm` work. " +
       "`npm create <name>` and `npm init <name>` are translated by piebox to install + run-bin. " +
       "`git <subcommand>` is routed to isomorphic-git for init/status/add/commit/log/branch/checkout. " +
       "See [piebox] notice lines in the output for any translations applied.",
-    parameters: {
+    inputSchema: {
       type: "object",
-      properties: { command: { type: "string" } },
+      properties: {
+        command: { type: "string" },
+        cwd: { type: "string" },
+      },
       required: ["command"],
     },
-    async execute(args, ctx) {
-      if (ctx.signal.aborted) return fail("cancelled");
-      const { command } = args as { command: string };
-
+    async execute(args, _sandbox, signal) {
+      if (signal.aborted) return { ok: false, summary: "cancelled" };
+      const workCwd = args.cwd ? resolvePath(cwd, args.cwd) : cwd;
       try {
-        // All translations (npm create, node -e, devDeps backstop,
-        // [piebox hint] postprocessor, git argv shim) live in the
-        // shared runtime layer so the Shell tab can reuse them.
-        const r = await runInSandbox(command, { fs, runtime, cwd, signal: ctx.signal });
-        const summary = `exit=${r.exitCode}`;
-        return r.exitCode === 0 ? ok(summary, r) : fail(summary, r);
+        const r = await runInSandbox(args.command, { fs, runtime, cwd: workCwd, signal });
+        return {
+          ok: r.exitCode === 0,
+          summary: `exit=${r.exitCode}`,
+          data: r,
+          exitCode: r.exitCode,
+        };
+      } catch (e) {
+        return fail(`bash failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    async executeStreaming(args, _sandbox, signal, onChunk) {
+      if (signal.aborted) return { ok: false, summary: "cancelled" };
+      const workCwd = args.cwd ? resolvePath(cwd, args.cwd) : cwd;
+      try {
+        const r = await runInSandbox(args.command, {
+          fs,
+          runtime,
+          cwd: workCwd,
+          signal,
+          onStdout: (chunk) => onChunk(chunk, "stdout"),
+          onStderr: (chunk) => onChunk(chunk, "stderr"),
+        });
+        return {
+          ok: r.exitCode === 0,
+          summary: `exit=${r.exitCode}`,
+          data: r,
+          exitCode: r.exitCode,
+        };
       } catch (e) {
         return fail(`bash failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
   };
 
-  const lsTool: ToolHandler = {
+  const lsTool: PieboxTool<{ path: string }, { entries: string[] }> = {
     name: "ls",
     description: "List directory entries.",
-    parameters: {
+    inputSchema: {
       type: "object",
       properties: { path: { type: "string" } },
       required: ["path"],
     },
-    async execute(args, ctx) {
-      if (ctx.signal.aborted) return fail("cancelled");
-      const { path } = args as { path: string };
-      const resolved = resolvePath(cwd, path);
+    async execute(args, _sandbox, signal) {
+      if (signal.aborted) return fail("cancelled");
+      const resolved = resolvePath(cwd, args.path);
       try {
         const dirents = fs.readdirSync(resolved, { withFileTypes: true });
-        const lines = dirents.map((d) =>
-          d.isDirectory() ? `${d.name}/` : d.name,
-        );
-        return ok(`${lines.length} entries in ${path}`, { entries: lines });
+        const lines = dirents.map((d) => (d.isDirectory() ? `${d.name}/` : d.name));
+        return ok(`${lines.length} entries in ${args.path}`, { entries: lines });
       } catch (e) {
         return fail(`ls failed: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -310,31 +314,31 @@ function buildTools(deps: ToolDeps): ToolHandler[] {
   // ── git tools (backed by isomorphic-git over the same PieboxFS) ─────
   const gitCtx = { fs, dir: cwd };
 
-  const gitInitTool: ToolHandler = {
+  const gitInitTool: PieboxTool<{ defaultBranch?: string }> = {
     name: "git_init",
     description: "Initialize a git repo at the cwd. Optionally set the default branch (defaults to 'main').",
-    parameters: {
+    inputSchema: {
       type: "object",
       properties: { defaultBranch: { type: "string" } },
     },
-    async execute(args, ctx) {
-      if (ctx.signal.aborted) return fail("cancelled");
-      const { defaultBranch } = args as { defaultBranch?: string };
+    async execute(args, _sandbox, signal) {
+      if (signal.aborted) return fail("cancelled");
+      const defaultBranch = args.defaultBranch ?? "main";
       try {
-        await gitInit(gitCtx, defaultBranch ?? "main");
-        return ok(`initialized git repo at ${cwd} (default branch: ${defaultBranch ?? "main"})`);
+        await gitInit(gitCtx, defaultBranch);
+        return ok(`initialized git repo at ${cwd} (default branch: ${defaultBranch})`);
       } catch (e) {
         return fail(`git_init failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
   };
 
-  const gitStatusTool: ToolHandler = {
+  const gitStatusTool: PieboxTool<Record<string, never>, { changes: Array<{ path: string; status: string }> }> = {
     name: "git_status",
     description: "List files that differ between HEAD, the index, and the working directory.",
-    parameters: { type: "object", properties: {} },
-    async execute(_args, ctx) {
-      if (ctx.signal.aborted) return fail("cancelled");
+    inputSchema: { type: "object", properties: {} },
+    async execute(_args, _sandbox, signal) {
+      if (signal.aborted) return fail("cancelled");
       try {
         const changes = await gitStatus(gitCtx);
         if (changes.length === 0) return ok("clean — no changes", { changes: [] });
@@ -346,27 +350,27 @@ function buildTools(deps: ToolDeps): ToolHandler[] {
     },
   };
 
-  const gitAddTool: ToolHandler = {
+  const gitAddTool: PieboxTool<{ filepath?: string; all?: boolean }> = {
     name: "git_add",
     description: "Stage a file. Pass `filepath` (cwd-relative) for a single file, or set `all: true` to stage everything that differs.",
-    parameters: {
+    inputSchema: {
       type: "object",
       properties: {
         filepath: { type: "string", description: "cwd-relative file path" },
         all: { type: "boolean", description: "Stage all modified/new files" },
       },
     },
-    async execute(args, ctx) {
-      if (ctx.signal.aborted) return fail("cancelled");
-      const { filepath, all } = args as { filepath?: string; all?: boolean };
+    async execute(args, _sandbox, signal) {
+      if (signal.aborted) return fail("cancelled");
       try {
-        if (all) {
+        if (args.all) {
           const touched = await gitAddAll(gitCtx);
           return ok(`staged ${touched.length} file(s)`, { staged: touched });
         }
-        if (!filepath) return fail("git_add needs `filepath` or `all: true`");
-        // Strip leading cwd if the model passed an absolute path.
-        const rel = filepath.startsWith(cwd + "/") ? filepath.slice(cwd.length + 1) : filepath;
+        if (!args.filepath) return fail("git_add needs `filepath` or `all: true`");
+        const rel = args.filepath.startsWith(cwd + "/")
+          ? args.filepath.slice(cwd.length + 1)
+          : args.filepath;
         await gitAdd(gitCtx, rel);
         return ok(`staged ${rel}`);
       } catch (e) {
@@ -375,10 +379,10 @@ function buildTools(deps: ToolDeps): ToolHandler[] {
     },
   };
 
-  const gitCommitTool: ToolHandler = {
+  const gitCommitTool: PieboxTool<{ message: string; author?: { name: string; email: string } }, { sha: string }> = {
     name: "git_commit",
     description: "Commit staged changes. Provide `message` (required); optionally `author.name` and `author.email`.",
-    parameters: {
+    inputSchema: {
       type: "object",
       properties: {
         message: { type: "string" },
@@ -389,30 +393,28 @@ function buildTools(deps: ToolDeps): ToolHandler[] {
       },
       required: ["message"],
     },
-    async execute(args, ctx) {
-      if (ctx.signal.aborted) return fail("cancelled");
-      const { message, author } = args as { message: string; author?: { name: string; email: string } };
+    async execute(args, _sandbox, signal) {
+      if (signal.aborted) return fail("cancelled");
       try {
-        const sha = await gitCommit(gitCtx, message, author);
-        return ok(`committed ${sha.slice(0, 8)}: ${message}`, { sha });
+        const sha = await gitCommit(gitCtx, args.message, args.author);
+        return ok(`committed ${sha.slice(0, 8)}: ${args.message}`, { sha });
       } catch (e) {
         return fail(`git_commit failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
   };
 
-  const gitLogTool: ToolHandler = {
+  const gitLogTool: PieboxTool<{ depth?: number }, { commits: Array<{ oid: string; message: string; author: string }> }> = {
     name: "git_log",
     description: "Return the most recent commits (default depth 10).",
-    parameters: {
+    inputSchema: {
       type: "object",
       properties: { depth: { type: "number" } },
     },
-    async execute(args, ctx) {
-      if (ctx.signal.aborted) return fail("cancelled");
-      const { depth } = args as { depth?: number };
+    async execute(args, _sandbox, signal) {
+      if (signal.aborted) return fail("cancelled");
       try {
-        const entries = await gitLog(gitCtx, depth ?? 10);
+        const entries = await gitLog(gitCtx, args.depth ?? 10);
         const summary = entries.length === 0
           ? "no commits yet"
           : `${entries.length} commit(s): ${entries.map((e) => `${e.oid.slice(0, 7)} ${e.message}`).join(" | ")}`;
@@ -423,10 +425,10 @@ function buildTools(deps: ToolDeps): ToolHandler[] {
     },
   };
 
-  const gitBranchTool: ToolHandler = {
+  const gitBranchTool: PieboxTool<{ name?: string; checkout?: boolean; current?: boolean }> = {
     name: "git_branch",
     description: "Branch operations. Pass `name` to create (and `checkout: true` to switch). Pass nothing to list branches. Pass `current: true` to report the current branch.",
-    parameters: {
+    inputSchema: {
       type: "object",
       properties: {
         name: { type: "string" },
@@ -434,20 +436,19 @@ function buildTools(deps: ToolDeps): ToolHandler[] {
         current: { type: "boolean" },
       },
     },
-    async execute(args, ctx) {
-      if (ctx.signal.aborted) return fail("cancelled");
-      const { name, checkout, current } = args as { name?: string; checkout?: boolean; current?: boolean };
+    async execute(args, _sandbox, signal) {
+      if (signal.aborted) return fail("cancelled");
       try {
-        if (current) {
+        if (args.current) {
           const b = await gitCurrentBranch(gitCtx);
           return ok(`current branch: ${b ?? "(detached)"}`, { branch: b });
         }
-        if (!name) {
+        if (!args.name) {
           const list = await gitListBranches(gitCtx);
           return ok(`${list.length} branch(es): ${list.join(", ")}`, { branches: list });
         }
-        await gitBranch(gitCtx, name, checkout ?? false);
-        return ok(`created branch ${name}${checkout ? " (checked out)" : ""}`);
+        await gitBranch(gitCtx, args.name, args.checkout ?? false);
+        return ok(`created branch ${args.name}${args.checkout ? " (checked out)" : ""}`);
       } catch (e) {
         return fail(`git_branch failed: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -460,10 +461,17 @@ function buildTools(deps: ToolDeps): ToolHandler[] {
   ];
 }
 
-// ── System prompt ─────────────────────────────────────────────────────────
+// ── System prompt: capability template + browser-specific addendum ────────
+// The driver's `defaultSystemPromptBuilder` handles the generic per-
+// capability prose (vfs vs os, shim vs real process model, available
+// binaries, etc.). The playground appends substrate-specific notes
+// almostnode users need but the driver shouldn't ship: which npm
+// translations apply, what `bash` does and doesn't have, the
+// devDependencies-vs-dependencies trap, dev-server invocation rules,
+// and the strict verification protocol.
 
-const SYSTEM_PROMPT = [
-  "You are a coding agent operating inside a sandboxed in-browser Node.js environment (almostnode).",
+const BROWSER_PROMPT_ADDENDUM = [
+  "## Substrate: almostnode (in-browser Node.js)",
   "The cwd is /work. All paths are inside the in-memory virtual filesystem.",
   "",
   "## Tools",
@@ -574,7 +582,11 @@ const SYSTEM_PROMPT = [
   "- Be concise.",
 ].join("\n");
 
-// ── Build session ─────────────────────────────────────────────────────────
+function buildSystemPromptForBrowser(caps: RuntimeCapabilities): string {
+  return defaultSystemPromptBuilder(caps) + "\n\n" + BROWSER_PROMPT_ADDENDUM;
+}
+
+// ── Public API ────────────────────────────────────────────────────────────
 
 export interface BuildAgentOptions {
   fs: PieboxFS;
@@ -582,45 +594,40 @@ export interface BuildAgentOptions {
   cwd: string;
   apiKey: string;
   modelId?: string;
-  /** Prior turns to thread into the LLM context. Tool calls + results
-   *  must be embedded on assistant messages so the model sees what it
-   *  did in earlier turns (the SDK session only persists assistant
-   *  *text* across submits, so we rebuild the session each turn). */
-  history?: SdkChatMessage[];
-  /** Optional trace sink. Zero cost when absent. */
-  tracer?: Tracer;
 }
 
 export interface AgentHandle {
-  session: AgentSession;
+  driver: AgentDriver;
   modelId: string;
+  sandbox: Sandbox;
+  toolset: PieboxToolset;
 }
 
+/**
+ * Build the playground agent: a Sandbox over PieboxFS/PieboxRuntime,
+ * the 11 PieboxTools wrapped into a toolset, and a Gemini-backed
+ * AgentDriver wired up with the browser system prompt.
+ *
+ * The driver carries multi-turn history internally — callers should
+ * reuse the returned handle across `submit()` calls instead of
+ * rebuilding it (which was the pre-Step-4 pattern, made obsolete by
+ * the driver's own history).
+ */
 export function buildAgent(options: BuildAgentOptions): AgentHandle {
   const { fs, runtime, cwd, apiKey } = options;
   const modelId = options.modelId ?? "gemini-3-flash-preview";
 
-  const llm = createGeminiClient({ apiKey, model: modelId, isByok: true });
+  const llm = createGeminiLlmClient({ apiKey, model: modelId, isByok: true });
+  const sandbox = createBrowserSandbox({ fs, runtime, cwd });
+  const tools = buildBrowserTools(fs, runtime, cwd);
+  const toolset = createToolset(tools);
 
-  const tools = buildTools({ fs, runtime, cwd });
-  const registry = createToolRegistry();
-  for (const t of tools) registry.register(t);
-
-  const session = createAgentSession({
-    strategy: createReactLoopStrategy(),
+  const driver = createAgentDriver({
+    sandbox,
+    toolset,
     llm,
-    tools: createDispatch(registry),
-    toolList: tools,
-    toolContext: () => ({
-      workspace: EMPTY_WORKSPACE,
-      runtime: EMPTY_RUNTIME,
-      signal: new AbortController().signal,
-    }),
-    metrics: createMetricsCollector(),
-    history: options.history ?? [],
-    systemPromptBuilder: () => SYSTEM_PROMPT,
-    tracer: options.tracer,
+    systemPromptBuilder: buildSystemPromptForBrowser,
   });
 
-  return { session, modelId };
+  return { driver, modelId, sandbox, toolset };
 }

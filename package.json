@@ -43,6 +43,10 @@
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build"
   },
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
   "keywords": [
     "sandbox",
     "agent",
@@ -75,5 +79,8 @@
     "@types/diff": "^7.0.2",
     "typescript": "^5.8.3",
     "vitest": "^2.1.2"
+  },
+  "overrides": {
+    "@inbrowser/resumable": "^0.1.0"
   }
 }
