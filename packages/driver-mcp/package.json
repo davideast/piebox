@@ -1,0 +1,41 @@
+{
+  "name": "@piebox/driver-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Model Context Protocol driver for piebox sandboxes. Exposes a piebox sandbox's toolset to Claude Desktop / Cursor / any MCP-compatible client.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./stdio-server": {
+      "types": "./src/stdio-server.ts",
+      "import": "./src/stdio-server.ts",
+      "default": "./src/stdio-server.ts"
+    }
+  },
+  "bin": {
+    "piebox-mcp": "./src/stdio-server.ts"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "peerDependencies": {
+    "piebox": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

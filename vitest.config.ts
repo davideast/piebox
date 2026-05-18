@@ -24,4 +24,14 @@ export default defineConfig({
       piebox: `${root}src/index.ts`,
     },
   },
+  test: {
+    // Pick up tests in src/ (piebox core) and across packages/*.
+    // Without an explicit include, vitest's default scans relative
+    // to whichever cwd it autodetects per workspace.
+    include: [
+      "src/**/*.{test,spec}.?(c|m)[jt]s?(x)",
+      "packages/*/test/**/*.{test,spec}.?(c|m)[jt]s?(x)",
+      "packages/*/src/**/*.{test,spec}.?(c|m)[jt]s?(x)",
+    ],
+  },
 });
